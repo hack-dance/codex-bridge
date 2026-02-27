@@ -13,6 +13,11 @@ const debugCompleteBody = t.Object({
   note: t.Optional(t.String()),
 });
 
+const debugReconcileBody = t.Object({
+  clearSyntheticRunningLanes: t.Optional(t.Boolean()),
+  clearOrphanedActiveTurns: t.Optional(t.Boolean()),
+});
+
 export const debugModule = new Elysia({ name: "debug-module" })
   .post(
     "/debug/request-approval",
@@ -78,5 +83,77 @@ export const debugModule = new Elysia({ name: "debug-module" })
         tags: ["debug"],
       },
       body: debugCompleteBody,
+    }
+  )
+  .post(
+    "/debug/reconcile-stale",
+    async ({ body }) => {
+      const clearSyntheticRunningLanes =
+        body.clearSyntheticRunningLanes !== false;
+      const clearOrphanedActiveTurns = body.clearOrphanedActiveTurns !== false;
+      const updates: Array<{
+        laneId: string;
+        changes: string[];
+      }> = [];
+
+      for (const lane of runtime.lanes.values()) {
+        const changes: string[] = [];
+        if (
+          clearSyntheticRunningLanes &&
+          lane.threadId &&
+          runtime.isSyntheticThreadId(lane.threadId) &&
+          lane.status === "running"
+        ) {
+          await runtime.setLaneStatus(
+            lane,
+            "blocked",
+            "lane.reconciled.synthetic_thread",
+            {
+              threadId: lane.threadId,
+            }
+          );
+          changes.push("blocked_synthetic_running_lane");
+        }
+
+        if (
+          clearOrphanedActiveTurns &&
+          lane.activeTurnId &&
+          !runtime.laneSessions.has(lane.laneId)
+        ) {
+          const staleTurnId = lane.activeTurnId;
+          lane.activeTurnId = undefined;
+          lane.updatedAt = runtime.nowIso();
+          await runtime.persistLane(lane);
+          await runtime.emitEvent({
+            eventId: crypto.randomUUID(),
+            laneId: lane.laneId,
+            type: "lane.turn.reconciled.orphaned",
+            ts: runtime.nowIso(),
+            severity: "warn",
+            payload: {
+              threadId: lane.threadId ?? null,
+              staleTurnId,
+            },
+          });
+          changes.push("cleared_orphaned_active_turn");
+        }
+
+        if (changes.length > 0) {
+          updates.push({ laneId: lane.laneId, changes });
+        }
+      }
+
+      return {
+        ok: true,
+        updates,
+        count: updates.length,
+      };
+    },
+    {
+      detail: {
+        summary: "Reconcile stale synthetic lanes and orphaned active turns",
+        tags: ["debug", "lanes"],
+      },
+      body: debugReconcileBody,
     }
   );

@@ -15,6 +15,8 @@ const CODEX_APP_SERVER_VERSION = "0.5.0";
 const GIT_STATUS_PREFIX_REGEX = /^..\s+/;
 const EVENT_LOG_SUFFIX_REGEX = /\.jsonl$/;
 const PROCESS_LIST_LINE_REGEX = /^(\d+)\s+(.+)$/;
+const SYNTHETIC_THREAD_ID_PREFIX = "thr_";
+const WATCHER_MISSING_THREAD_THRESHOLD = 3;
 const LSOF_SESSION_PATH_REGEX =
   /\s(\d+\w)\s+REG\s+.+\s(\/Users\/hack\/.codex\/sessions\/.+rollout-.+\.jsonl)$/;
 const THREAD_ID_FROM_SESSION_PATH_REGEX =
@@ -31,6 +33,8 @@ type LaneStatus =
   | "failed"
   | "interrupted";
 
+type LaneReadinessMode = "strict" | "lenient";
+
 export interface Lane {
   laneId: string;
   projectId?: string;
@@ -40,6 +44,7 @@ export interface Lane {
   branch?: string;
   threadId?: string;
   activeTurnId?: string;
+  readinessMode?: LaneReadinessMode;
   preferredSurface?: "mac-app" | "vscode" | "cli" | "any";
   surface?: "mac-app" | "vscode" | "cli" | "unknown";
   status: LaneStatus;
@@ -117,6 +122,8 @@ interface LaneSession {
   >;
   startedAt: string;
   readyAt?: string;
+  readinessDeferred: boolean;
+  readinessReason: string | null;
   sessionStartedEventEmitted: boolean;
   closing: boolean;
 }
@@ -147,6 +154,7 @@ const attachedThreadLastUpdated = new Map<string, number>();
 const webhookSubscriptions = new Map<string, WebhookSubscription>();
 const laneSessions = new Map<string, LaneSession>();
 const threadToLaneSession = new Map<string, string>();
+const watcherMissingThreadCounts = new Map<string, number>();
 
 const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
@@ -164,6 +172,14 @@ function fireAndForget(task: Promise<unknown>) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function getLaneReadinessMode(lane: Lane): LaneReadinessMode {
+  return lane.readinessMode ?? "lenient";
+}
+
+function isSyntheticThreadId(threadId: string) {
+  return threadId.startsWith(SYNTHETIC_THREAD_ID_PREFIX);
 }
 
 function normalizeSurface(
@@ -427,10 +443,13 @@ async function dispatchWebhooks(event: LaneEvent) {
 
   await Promise.allSettled(
     subs.map(async (sub) => {
+      const eventKey = `${sub.id}:${event.eventId}`;
       const payload = {
         id: randomUUID(),
         ts: nowIso(),
         source: "oai-app-proxy",
+        eventKey,
+        eventId: event.eventId,
         subscriptionId: sub.id,
         eventType: event.type,
         laneId: event.laneId,
@@ -578,6 +597,53 @@ async function laneSessionRequest(
   });
 }
 
+interface LaneSessionRequestRetryOptions {
+  timeoutMs?: number;
+  maxAttempts?: number;
+  initialBackoffMs?: number;
+  retryOnNoRollout?: boolean;
+}
+
+async function laneSessionRequestWithRetry(
+  laneId: string,
+  method: string,
+  params: Record<string, unknown>,
+  options: LaneSessionRequestRetryOptions = {}
+) {
+  const maxAttempts = Math.max(1, options.maxAttempts ?? 1);
+  const timeoutMs = options.timeoutMs ?? 15_000;
+  const retryOnNoRollout = options.retryOnNoRollout ?? true;
+  let backoffMs = Math.max(0, options.initialBackoffMs ?? 200);
+  let lastResponse: JsonRpcMessage | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await laneSessionRequest(
+      laneId,
+      method,
+      params,
+      timeoutMs
+    );
+    lastResponse = response;
+    if (!response.error) {
+      return response;
+    }
+
+    const errorMessage = getRpcErrorMessage(response, `${method} failed`);
+    const shouldRetryNoRollout =
+      retryOnNoRollout && isNoRolloutFoundError(errorMessage);
+    if (!(shouldRetryNoRollout && attempt < maxAttempts)) {
+      return response;
+    }
+
+    if (backoffMs > 0) {
+      await sleepMs(backoffMs);
+      backoffMs = Math.min(2000, Math.floor(backoffMs * 1.8));
+    }
+  }
+
+  return lastResponse ?? {};
+}
+
 async function emitLaneSessionStarted(
   lane: Lane,
   session: LaneSession,
@@ -588,6 +654,8 @@ async function emitLaneSessionStarted(
   }
   const readyAt = nowIso();
   session.readyAt = readyAt;
+  session.readinessDeferred = readiness.deferred;
+  session.readinessReason = readiness.reason;
   session.sessionStartedEventEmitted = true;
   await emitEvent({
     eventId: randomUUID(),
@@ -671,7 +739,11 @@ async function maybeReuseLaneSession(
     linkThreadToLaneSession(lane.threadId, lane.laneId);
   }
   if (waitForThreadResume && lane.threadId && !existing.readyAt) {
-    const ready = await waitForThreadReadiness(lane);
+    const ready = await waitForThreadReadiness(
+      lane,
+      10,
+      getLaneReadinessMode(lane) === "lenient"
+    );
     if (emitStartedEvent) {
       await emitLaneSessionStarted(lane, existing, ready);
     }
@@ -847,8 +919,8 @@ function queueLaneTurnCompleted(lane: Lane, params: Record<string, unknown>) {
   lane.updatedAt = nowIso();
   lane.activeTurnId = undefined;
   fireAndForget(persistLane(lane));
-  fireAndForget(emitLaneCompletion(lane, params));
   fireAndForget(emitLaneSessionNotification(lane, "turn/completed", params));
+  fireAndForget(emitLaneCompletion(lane, params));
 }
 
 function queueLaneSessionNotification(
@@ -961,7 +1033,11 @@ async function initializeLaneSessionIfNeeded(
   }
   session.threadId = lane.threadId;
   linkThreadToLaneSession(lane.threadId, lane.laneId);
-  const ready = await waitForThreadReadiness(lane);
+  const ready = await waitForThreadReadiness(
+    lane,
+    10,
+    getLaneReadinessMode(lane) === "lenient"
+  );
   if (emitStartedEvent) {
     await emitLaneSessionStarted(lane, session, ready);
   }
@@ -982,6 +1058,8 @@ function createLaneSession(lane: Lane): LaneSession {
     serverRequests: new Map(),
     startedAt: nowIso(),
     readyAt: undefined,
+    readinessDeferred: false,
+    readinessReason: null,
     sessionStartedEventEmitted: false,
     closing: false,
   };
@@ -1041,10 +1119,41 @@ async function startLaneSession(
   }
 }
 
-function stopLaneSession(laneId: string) {
+async function stopLaneSession(laneId: string) {
   const s = laneSessions.get(laneId);
   if (!s) {
     return false;
+  }
+  const lane = lanes.get(laneId);
+  if (lane?.threadId && lane.activeTurnId) {
+    try {
+      const interruptResult = await laneSessionRequest(
+        laneId,
+        "turn/interrupt",
+        {
+          threadId: lane.threadId,
+          turnId: lane.activeTurnId,
+        },
+        4000
+      );
+      if (!interruptResult.error) {
+        lane.activeTurnId = undefined;
+        lane.updatedAt = nowIso();
+        await persistLane(lane);
+        await emitEvent({
+          eventId: randomUUID(),
+          laneId: lane.laneId,
+          type: "lane.turn.interrupted.on_stop",
+          ts: nowIso(),
+          severity: "info",
+          payload: {
+            threadId: lane.threadId,
+          },
+        });
+      }
+    } catch {
+      // ignore graceful stop interrupt failures
+    }
   }
   s.closing = true;
   try {
@@ -1133,7 +1242,7 @@ async function emitLaneCompletion(
   await emitEvent({
     eventId: randomUUID(),
     laneId: lane.laneId,
-    type: "lane.turn.completed.notification",
+    type: "lane.turn.completed",
     ts: nowIso(),
     severity: "info",
     payload: completionPayload,
@@ -1577,12 +1686,18 @@ async function detectRunningCodexSessions() {
 
 let watcherIntervalSec = 15;
 let watcherTimer: Timer | null = null;
+let watcherTickInFlight = false;
 
 function shouldSkipWatcherLane(lane: Lane) {
   if (!lane.threadId) {
     return true;
   }
-  return ["done", "failed", "interrupted"].includes(lane.status);
+  if (isSyntheticThreadId(lane.threadId)) {
+    return true;
+  }
+  return ["idle", "blocked", "done", "failed", "interrupted"].includes(
+    lane.status
+  );
 }
 
 async function emitWatcherSyncError(lane: Lane, error: Error) {
@@ -1596,14 +1711,18 @@ async function emitWatcherSyncError(lane: Lane, error: Error) {
   });
 }
 
-async function emitWatcherThreadMissing(lane: Lane) {
+async function emitWatcherThreadMissing(lane: Lane, misses: number) {
   await emitEvent({
     eventId: randomUUID(),
     laneId: lane.laneId,
     type: "lane.codex.thread_missing",
     ts: nowIso(),
     severity: "warn",
-    payload: { threadId: lane.threadId },
+    payload: {
+      threadId: lane.threadId,
+      misses,
+      threshold: WATCHER_MISSING_THREAD_THRESHOLD,
+    },
   });
 }
 
@@ -1637,21 +1756,53 @@ async function emitWatcherActivity(
   });
 }
 
-async function processWatcherLane(lane: Lane) {
+async function resolveWatcherThread(
+  threadId: string,
+  cache: Map<string, Promise<CodexThread | null>>
+) {
+  const cached = cache.get(threadId);
+  if (cached) {
+    return await cached;
+  }
+  const pending = getCodexThreadById(threadId);
+  cache.set(threadId, pending);
+  return await pending;
+}
+
+async function processWatcherLane(
+  lane: Lane,
+  threadCache: Map<string, Promise<CodexThread | null>>
+) {
   if (!lane.threadId) {
     return;
   }
   let thread: CodexThread | null = null;
   try {
-    thread = await getCodexThreadById(lane.threadId);
+    thread = await resolveWatcherThread(lane.threadId, threadCache);
   } catch (error) {
     await emitWatcherSyncError(lane, error as Error);
     return;
   }
   if (!thread) {
-    await emitWatcherThreadMissing(lane);
+    const misses = (watcherMissingThreadCounts.get(lane.laneId) ?? 0) + 1;
+    watcherMissingThreadCounts.set(lane.laneId, misses);
+    await emitWatcherThreadMissing(lane, misses);
+    if (misses >= WATCHER_MISSING_THREAD_THRESHOLD) {
+      lane.activeTurnId = undefined;
+      await setLaneStatus(
+        lane,
+        "blocked",
+        "lane.codex.thread_missing_terminal",
+        {
+          threadId: lane.threadId,
+          misses,
+          threshold: WATCHER_MISSING_THREAD_THRESHOLD,
+        }
+      );
+    }
     return;
   }
+  watcherMissingThreadCounts.delete(lane.laneId);
   const previousUpdatedAt = attachedThreadLastUpdated.get(lane.threadId) ?? 0;
   const updatedAt = thread.updatedAt ?? 0;
   if (updatedAt <= previousUpdatedAt) {
@@ -1667,11 +1818,20 @@ async function processWatcherLane(lane: Lane) {
 }
 
 async function runWatcherTick() {
-  for (const lane of lanes.values()) {
-    if (shouldSkipWatcherLane(lane)) {
-      continue;
+  if (watcherTickInFlight) {
+    return;
+  }
+  watcherTickInFlight = true;
+  try {
+    const threadCache = new Map<string, Promise<CodexThread | null>>();
+    for (const lane of lanes.values()) {
+      if (shouldSkipWatcherLane(lane)) {
+        continue;
+      }
+      await processWatcherLane(lane, threadCache);
     }
-    await processWatcherLane(lane);
+  } finally {
+    watcherTickInFlight = false;
   }
 }
 
@@ -1782,8 +1942,10 @@ export const bridgeRuntime = {
   getRpcErrorMessage,
   getTurnId,
   getWatcherState,
+  isSyntheticThreadId,
   laneEvents,
   laneSessionRequest,
+  laneSessionRequestWithRetry,
   laneSessionRespondApproval,
   laneSessions,
   lanes,

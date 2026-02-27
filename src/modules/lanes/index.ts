@@ -42,6 +42,9 @@ const lanesAttachBody = t.Object({
     ])
   ),
   requirePreferredSurface: t.Optional(t.Boolean()),
+  readinessMode: t.Optional(
+    t.Union([t.Literal("strict"), t.Literal("lenient")])
+  ),
   acceptanceCriteria: t.Optional(t.Array(t.String())),
   verificationCommands: t.Optional(t.Array(t.String())),
 });
@@ -54,6 +57,9 @@ const lanesCreateBody = t.Object({
   worktreePath: t.Optional(t.String()),
   branch: t.Optional(t.String()),
   threadId: t.Optional(t.String()),
+  readinessMode: t.Optional(
+    t.Union([t.Literal("strict"), t.Literal("lenient")])
+  ),
   acceptanceCriteria: t.Optional(t.Array(t.String())),
   verificationCommands: t.Optional(t.Array(t.String())),
 });
@@ -123,6 +129,34 @@ const requireActiveTurnId = ({
   return lane.activeTurnId;
 };
 
+const getLaneReadinessMode = ({ lane }: { lane: Lane }): "strict" | "lenient" =>
+  lane.readinessMode ?? "lenient";
+
+const parseAttachPreferredSurface = ({
+  value,
+}: {
+  value: unknown;
+}): "mac-app" | "vscode" | "cli" | "any" =>
+  value === "mac-app" ||
+  value === "vscode" ||
+  value === "cli" ||
+  value === "any"
+    ? value
+    : "any";
+
+const isSurfaceMismatch = ({
+  requirePreferredSurface,
+  preferredSurface,
+  detectedSurface,
+}: {
+  requirePreferredSurface: boolean;
+  preferredSurface: "mac-app" | "vscode" | "cli" | "any";
+  detectedSurface: "mac-app" | "vscode" | "cli" | "unknown";
+}): boolean =>
+  requirePreferredSurface &&
+  preferredSurface !== "any" &&
+  detectedSurface !== preferredSurface;
+
 async function requestLaneTurnStart({
   payload,
   lane,
@@ -132,12 +166,17 @@ async function requestLaneTurnStart({
   lane: Lane;
   input: string;
 }) {
-  const result = await runtime.laneSessionRequest(
+  const result = await runtime.laneSessionRequestWithRetry(
     payload.laneId,
     "turn/start",
     {
       threadId: lane.threadId,
       input: [{ type: "text", text: input }],
+    },
+    {
+      maxAttempts: 5,
+      initialBackoffMs: 200,
+      retryOnNoRollout: true,
     }
   );
   if (result?.error) {
@@ -159,13 +198,18 @@ async function requestLaneTurnSteer({
   input: string;
 }) {
   const activeTurnId = requireActiveTurnId({ lane, action: "steer" });
-  const result = await runtime.laneSessionRequest(
+  const result = await runtime.laneSessionRequestWithRetry(
     payload.laneId,
     "turn/steer",
     {
       threadId: lane.threadId,
       expectedTurnId: activeTurnId,
       input: [{ type: "text", text: input }],
+    },
+    {
+      maxAttempts: 5,
+      initialBackoffMs: 200,
+      retryOnNoRollout: true,
     }
   );
   if (result?.error) {
@@ -181,12 +225,17 @@ async function requestLaneTurnInterrupt({
   lane: Lane;
 }) {
   const activeTurnId = requireActiveTurnId({ lane, action: "interrupt" });
-  const result = await runtime.laneSessionRequest(
+  const result = await runtime.laneSessionRequestWithRetry(
     payload.laneId,
     "turn/interrupt",
     {
       threadId: lane.threadId,
       turnId: activeTurnId,
+    },
+    {
+      maxAttempts: 4,
+      initialBackoffMs: 150,
+      retryOnNoRollout: true,
     }
   );
   if (result?.error) {
@@ -238,6 +287,17 @@ async function runThreadedLaneAction({
   const session =
     runtime.laneSessions.get(payload.laneId) ??
     (await runtime.startLaneSession(lane));
+  if (
+    getLaneReadinessMode({ lane }) === "strict" &&
+    session.readinessDeferred
+  ) {
+    throw new LaneActionError(409, {
+      error: "lane_readiness_deferred",
+      message:
+        session.readinessReason ??
+        "strict readiness mode blocks turns until thread resume succeeds",
+    });
+  }
   if (payload.action === "interrupt") {
     await requestLaneTurnInterrupt({ payload, lane });
     return;
@@ -337,11 +397,9 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         return status(404, { error: "thread_not_found" });
       }
 
-      const preferredSurface = String(body.preferredSurface ?? "any") as
-        | "mac-app"
-        | "vscode"
-        | "cli"
-        | "any";
+      const preferredSurface = parseAttachPreferredSurface({
+        value: body.preferredSurface,
+      });
       const requirePreferredSurface =
         body.requirePreferredSurface === undefined
           ? false
@@ -350,9 +408,11 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         thread.surface ?? runtime.normalizeSurface(thread.source);
 
       if (
-        requirePreferredSurface &&
-        preferredSurface !== "any" &&
-        detectedSurface !== preferredSurface
+        isSurfaceMismatch({
+          requirePreferredSurface,
+          preferredSurface,
+          detectedSurface,
+        })
       ) {
         return status(409, {
           error: "surface_mismatch",
@@ -377,6 +437,7 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         branch: body.branch,
         threadId,
         activeTurnId: undefined,
+        readinessMode: body.readinessMode ?? "lenient",
         preferredSurface,
         surface: detectedSurface,
         status: "running" as const,
@@ -432,6 +493,7 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         branch: body.branch,
         threadId: body.threadId,
         activeTurnId: undefined,
+        readinessMode: body.readinessMode ?? "lenient",
         status: "starting" as const,
         acceptanceCriteria: body.acceptanceCriteria ?? [],
         verificationCommands: body.verificationCommands ?? [],
@@ -564,6 +626,9 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         startedAt: session?.startedAt ?? null,
         pendingRequests: session ? session.serverRequests.size : 0,
         activeTurnId: lane.activeTurnId ?? null,
+        readinessMode: lane.readinessMode ?? "lenient",
+        readinessDeferred: session?.readinessDeferred ?? false,
+        readinessReason: session?.readinessReason ?? null,
       };
     },
     {

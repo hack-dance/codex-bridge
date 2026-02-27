@@ -12,6 +12,7 @@ interface LaneEvent {
   eventType: string;
   laneId: string;
   subscriptionId: string;
+  eventKey?: string;
   payload: JsonObject;
 }
 
@@ -563,6 +564,7 @@ async function main() {
           url: `http://127.0.0.1:${webhookPort}/event`,
           events: [
             "lane.session.started",
+            "lane.turn.completed",
             "lane.turn.completed.notification",
             "lane.completed",
             "webhook.test",
@@ -606,7 +608,13 @@ async function main() {
     }
 
     const events = await requestJsonWithDebug<{
-      events: Array<{ type: string }>;
+      events: Array<{
+        type: string;
+        payload?: {
+          deferred?: boolean;
+          attempts?: number;
+        };
+      }>;
     }>("lane-events-initial", base, `/lanes/${laneId}/events`);
     logDebug("script:checkpoint", {
       label: "lane-events-initial-completed",
@@ -616,6 +624,17 @@ async function main() {
     assert(
       eventTypes.includes("lane.session.started"),
       "lane.session.started missing"
+    );
+    const sessionStartedEvent = events.payload.events?.find(
+      (event) => event.type === "lane.session.started"
+    );
+    assert(
+      sessionStartedEvent?.payload?.deferred !== true,
+      "new start-visible thread should not be readiness deferred"
+    );
+    assert(
+      Number(sessionStartedEvent?.payload?.attempts ?? 0) >= 1,
+      "lane.session.started attempts should be present"
     );
 
     if (includeKickoff) {
@@ -628,6 +647,7 @@ async function main() {
           return response.payload.events?.map((event) => event.type) ?? [];
         },
         (items) =>
+          items.includes("lane.turn.completed") &&
           items.includes("lane.turn.completed.notification") &&
           items.includes("lane.completed") &&
           items.includes("lane.item.completed.notification"),
@@ -723,6 +743,7 @@ async function main() {
     const completeEvents = webhookEvents.filter((event) =>
       [
         "lane.session.started",
+        "lane.turn.completed",
         "lane.turn.completed.notification",
         "lane.completed",
         "webhook.test",
@@ -753,6 +774,15 @@ async function main() {
     assert(
       typeof (subscription?.lastDeliveryAt ?? "") === "string",
       "webhook lastDeliveryAt not updated"
+    );
+    assert(
+      completeEvents
+        .filter((event) => event.eventType !== "webhook.test")
+        .every(
+          (event) =>
+            typeof event.eventKey === "string" && event.eventKey.length > 0
+        ),
+      "webhook eventKey missing on lifecycle events"
     );
 
     await requestJsonWithDebug(

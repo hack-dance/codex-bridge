@@ -12,6 +12,9 @@ This runbook explains how to run Codex threads through `codex-bridge`, including
 - thread: Codex conversation/thread ID.
 - lane session: Persistent `codex app-server` process bound to one lane.
 - surface: Normalized source type: `mac-app`, `cli`, `vscode`, `unknown`.
+- readiness mode:
+  - `lenient` (default): allows deferred readiness if resume is not immediately available.
+  - `strict`: requires successful readiness resume before continuing.
 
 ## Mental model
 
@@ -32,7 +35,8 @@ curl -s -X POST http://127.0.0.1:8787/codex/workflows/start-visible \
     "title":"New managed thread",
     "kickoffPrompt":"Start work on issue T-123",
     "preferredSurface":"any",
-    "requirePreferredSurface":false
+    "requirePreferredSurface":false,
+    "readinessMode":"lenient"
   }' | jq
 ```
 
@@ -40,7 +44,8 @@ Workflow:
 1. lane is created.
 2. lane session is started (`initialize` + `initialized`).
 3. `thread/start` runs inside that session.
-4. readiness gate retries `thread/read` and `thread/resume` (bounded backoff).
+4. for brand-new threads, kickoff uses the same live session directly (no cross-session resume polling).
+   for takeover flows, readiness gate retries `thread/read` and `thread/resume` (bounded backoff).
 5. optional kickoff `turn/start` runs.
 6. lane status moves to `running`.
 
@@ -66,7 +71,8 @@ curl -s -X POST http://127.0.0.1:8787/lanes/attach \
     "laneId":"lane-desktop",
     "threadId":"<thread-id>",
     "preferredSurface":"mac-app",
-    "requirePreferredSurface":true
+    "requirePreferredSurface":true,
+    "readinessMode":"strict"
   }' | jq
 ```
 
@@ -87,7 +93,8 @@ curl -s -X POST http://127.0.0.1:8787/codex/workflows/start-visible \
     "laneId":"lane-takeover",
     "threadId":"<thread-id>",
     "preferredSurface":"any",
-    "requirePreferredSurface":false
+    "requirePreferredSurface":false,
+    "readinessMode":"lenient"
   }' | jq
 ```
 
@@ -159,10 +166,18 @@ curl -s -X POST http://127.0.0.1:8787/webhooks \
 
 Webhook payload top-level fields:
 - `eventType`
+- `eventKey` (stable dedupe key for consumers)
+- `eventId`
 - `laneId`
 - `payload`
 - `subscriptionId`
 - `ts`
+
+Completion event semantics:
+- Canonical turn completion: `lane.turn.completed`
+- Raw forwarded app-server notification: `lane.turn.completed.notification`
+- Workflow completion: `lane.completed`
+- Kickoff skip signal when takeover readiness is deferred: `lane.turn.skipped.readiness_deferred`
 
 ## Surface constraints and guarantees
 
@@ -180,11 +195,24 @@ Not guaranteed:
 
 Bridge behavior:
 - readiness gate retries with bounded backoff,
-- for visible workflow starts, no-rollout can be recorded as deferred readiness and still emit lane session started.
+- in `lenient` mode takeover flows can be recorded as deferred readiness and still emit lane session started.
+- in `strict` mode, readiness failures block start/turn actions.
 
 Check:
 - `GET /lanes/:laneId/events`
 - `GET /lanes/:laneId/session/status`
+
+### New threads not obvious in Desktop or old threads look stuck
+
+Check:
+- Ensure `repoRoot` is passed during start/takeover so thread `cwd` maps to the Desktop workspace you are viewing.
+- Inspect `GET /lanes/:laneId/session/status`:
+  - `readinessDeferred=true` means session is alive but resume was not confirmed yet.
+  - `readinessReason` contains the latest readiness failure reason.
+- Stop lingering sessions with `POST /lanes/:laneId/session/stop`.
+  - bridge now sends best-effort `turn/interrupt` before process shutdown to reduce “thinking forever” stuck states.
+- Reconcile stale bridge state if you ran many local test lanes:
+  - `POST /debug/reconcile-stale` (blocks synthetic `thr_*` running lanes and clears orphaned `activeTurnId` values).
 
 ### Lane exists / thread not found / surface mismatch
 
@@ -204,5 +232,5 @@ bun run smoke:e2e
 
 Expected e2e milestones:
 - `lane.session.started`
-- `lane.turn.completed.notification`
+- `lane.turn.completed`
 - `lane.completed`

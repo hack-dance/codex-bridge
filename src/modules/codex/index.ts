@@ -49,6 +49,9 @@ const startVisibleBody = t.Object({
     ])
   ),
   requirePreferredSurface: t.Optional(t.Boolean()),
+  readinessMode: t.Optional(
+    t.Union([t.Literal("strict"), t.Literal("lenient")])
+  ),
   model: t.Optional(t.String()),
   acceptanceCriteria: t.Optional(t.Array(t.String())),
   verificationCommands: t.Optional(t.Array(t.String())),
@@ -118,6 +121,7 @@ interface StartVisibleBodyInput {
   threadId?: string;
   preferredSurface?: PreferredSurface;
   requirePreferredSurface?: boolean;
+  readinessMode?: "strict" | "lenient";
   model?: string;
   acceptanceCriteria?: string[];
   verificationCommands?: string[];
@@ -132,6 +136,7 @@ interface StartVisibleRequest {
   takeoverThreadId?: string;
   preferredSurface: PreferredSurface;
   requirePreferredSurface: boolean;
+  readinessMode: "strict" | "lenient";
   model?: string;
   acceptanceCriteria: string[];
   verificationCommands: string[];
@@ -140,6 +145,8 @@ interface StartVisibleRequest {
 interface StartVisibleThreadResult {
   sessionStartedAt: string;
   thread: CodexThread;
+  readinessDeferred: boolean;
+  readinessReason: string | null;
 }
 
 interface StartVisibleResult {
@@ -193,6 +200,9 @@ const parsePreferredSurface = (value: unknown): PreferredSurface => {
   return "any";
 };
 
+const parseReadinessMode = (value: unknown): "strict" | "lenient" =>
+  value === "strict" ? "strict" : "lenient";
+
 const parseStartVisibleRequest = ({
   body,
 }: {
@@ -206,6 +216,7 @@ const parseStartVisibleRequest = ({
   takeoverThreadId: parseOptionalString(body.threadId),
   preferredSurface: parsePreferredSurface(body.preferredSurface),
   requirePreferredSurface: body.requirePreferredSurface === true,
+  readinessMode: parseReadinessMode(body.readinessMode),
   model: parseOptionalString(body.model),
   acceptanceCriteria: body.acceptanceCriteria ?? [],
   verificationCommands: body.verificationCommands ?? [],
@@ -225,6 +236,7 @@ const createVisibleLane = ({
     repoRoot: request.repoRoot,
     threadId: request.takeoverThreadId,
     activeTurnId: undefined,
+    readinessMode: request.readinessMode,
     preferredSurface: request.preferredSurface,
     surface: takeoverThread ? getSurfaceFromThread(takeoverThread) : "unknown",
     status: "starting",
@@ -300,6 +312,7 @@ async function initializeVisibleLane({
       title: request.title ?? null,
       preferredSurface: request.preferredSurface,
       requirePreferredSurface: request.requirePreferredSurface,
+      readinessMode: request.readinessMode,
     },
   });
 }
@@ -365,15 +378,29 @@ async function ensureVisibleThreadReady({
   takeoverThread: CodexThread | null;
 }): Promise<StartVisibleThreadResult> {
   const session = await runtime.startLaneSession(lane, {
-    waitForThreadResume: !takeoverThread,
+    waitForThreadResume: Boolean(takeoverThread),
     emitStartedEvent: false,
   });
-
+  let readiness = {
+    attempts: 1,
+    deferred: false,
+    reason: null as string | null,
+  };
   const thread =
     takeoverThread ?? (await startVisibleThread({ lane, request }));
-  if (!takeoverThread) {
+  if (takeoverThread) {
+    readiness = await runtime.waitForThreadReadiness(
+      lane,
+      10,
+      request.readinessMode === "lenient"
+    );
+  } else {
     lane.threadId = thread.id;
     session.threadId = thread.id;
+    await runtime.startLaneSession(lane, {
+      waitForThreadResume: false,
+      emitStartedEvent: false,
+    });
   }
 
   syncLaneFromThread({
@@ -383,11 +410,12 @@ async function ensureVisibleThreadReady({
     repoRoot: request.repoRoot,
   });
   await runtime.persistLane(lane);
-  const ready = await runtime.waitForThreadReadiness(lane, 10, true);
-  await runtime.emitLaneSessionStarted(lane, session, ready);
+  await runtime.emitLaneSessionStarted(lane, session, readiness);
   return {
     sessionStartedAt: session.startedAt,
     thread,
+    readinessDeferred: session.readinessDeferred,
+    readinessReason: session.readinessReason,
   };
 }
 
@@ -423,21 +451,45 @@ async function maybeStartVisibleKickoffTurn({
   lane,
   thread,
   kickoffPrompt,
+  readinessDeferred,
+  readinessReason,
 }: {
   lane: Lane;
   thread: CodexThread;
   kickoffPrompt?: string;
+  readinessDeferred: boolean;
+  readinessReason: string | null;
 }): Promise<string | null> {
   if (!kickoffPrompt) {
     return null;
   }
 
-  const turnResponse = await runtime.laneSessionRequest(
+  if (readinessDeferred) {
+    await runtime.emitEvent({
+      eventId: crypto.randomUUID(),
+      laneId: lane.laneId,
+      type: "lane.turn.skipped.readiness_deferred",
+      ts: runtime.nowIso(),
+      severity: "warn",
+      payload: {
+        threadId: thread.id,
+        reason: readinessReason,
+      },
+    });
+    return null;
+  }
+
+  const turnResponse = await runtime.laneSessionRequestWithRetry(
     lane.laneId,
     "turn/start",
     {
       threadId: thread.id,
       input: [{ type: "text", text: kickoffPrompt }],
+    },
+    {
+      maxAttempts: 5,
+      initialBackoffMs: 200,
+      retryOnNoRollout: true,
     }
   );
   if (turnResponse.error) {
@@ -465,11 +517,12 @@ async function runStartVisibleWorkflow({
 }): Promise<StartVisibleResult> {
   runtime.debugLog("start-visible:entered", { laneId: lane.laneId });
 
-  const { thread, sessionStartedAt } = await ensureVisibleThreadReady({
-    lane,
-    request,
-    takeoverThread,
-  });
+  const { thread, sessionStartedAt, readinessDeferred, readinessReason } =
+    await ensureVisibleThreadReady({
+      lane,
+      request,
+      takeoverThread,
+    });
   await maybeSetVisibleThreadTitle({
     lane,
     thread,
@@ -480,6 +533,8 @@ async function runStartVisibleWorkflow({
     lane,
     thread,
     kickoffPrompt: request.kickoffPrompt,
+    readinessDeferred,
+    readinessReason,
   });
 
   lane.updatedAt = runtime.nowIso();
@@ -885,7 +940,7 @@ export const codexModule = new Elysia({ name: "codex-module" })
             reason: message,
             threadId: lane.threadId ?? null,
           });
-          runtime.stopLaneSession(lane.laneId);
+          await runtime.stopLaneSession(lane.laneId);
           return status(502, {
             error: "visible_workflow_failed",
             message,

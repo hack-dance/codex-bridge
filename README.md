@@ -23,6 +23,11 @@ Session-oriented endpoints:
 - `POST /lanes/:laneId/:action` (`prompt`, `steer`, `interrupt`)
 - `POST /codex/workflows/start-visible` (one-shot start/takeover workflow)
 
+Per-lane readiness policy:
+- `readinessMode: "lenient"` (default) allows deferred readiness (`no rollout found`) for takeover flows.
+- `readinessMode: "strict"` blocks/fails takeover start and turn actions until resume readiness is confirmed.
+- New thread creation (`thread/start` on the same lane session) now uses the app-server happy path directly and does not run cross-session resume polling.
+
 ## Surface model (Desktop vs CLI vs VS Code)
 
 Surfaces are normalized to: `mac-app`, `cli`, `vscode`, `unknown`.
@@ -61,7 +66,8 @@ curl -s -X POST http://127.0.0.1:8787/codex/workflows/start-visible \
     "title":"Bridge managed lane",
     "kickoffPrompt":"Review current branch and summarize status",
     "preferredSurface":"any",
-    "requirePreferredSurface":false
+    "requirePreferredSurface":false,
+    "readinessMode":"lenient"
   }' | jq
 ```
 
@@ -69,7 +75,7 @@ This performs:
 - lane create,
 - persistent lane session start,
 - `thread/start`,
-- readiness gate (`thread/read` + `thread/resume` retries),
+- same-session workflow bootstrap (no cross-session resume poll for new thread),
 - optional kickoff `turn/start`,
 - lane status -> `running`.
 
@@ -90,7 +96,8 @@ curl -s -X POST http://127.0.0.1:8787/lanes/attach \
     "laneId":"lane-desktop",
     "threadId":"<thread-id>",
     "preferredSurface":"mac-app",
-    "requirePreferredSurface":true
+    "requirePreferredSurface":true,
+    "readinessMode":"strict"
   }' | jq
 ```
 
@@ -109,7 +116,8 @@ curl -s -X POST http://127.0.0.1:8787/codex/workflows/start-visible \
     "laneId":"lane-takeover",
     "threadId":"<thread-id>",
     "preferredSurface":"any",
-    "requirePreferredSurface":false
+    "requirePreferredSurface":false,
+    "readinessMode":"lenient"
   }' | jq
 ```
 
@@ -138,15 +146,20 @@ curl -s -X POST http://127.0.0.1:8787/lanes/lane-desktop/interrupt \
 
 Key lane lifecycle events:
 - `lane.session.started`
+- `lane.turn.skipped.readiness_deferred` (kickoff intentionally skipped when takeover readiness is deferred)
 - `lane.turn.started.notification`
 - `lane.item.completed.notification`
+- `lane.turn.completed` (canonical completion signal for consumers)
 - `lane.turn.completed.notification`
+  - raw forwarded app-server notification (`turn/completed`)
 - `lane.completed`
 - `lane.approval.requested`
 - `lane.approval.resolved`
 
 Webhook envelope includes top-level:
 - `eventType`
+- `eventKey` (stable dedupe key per subscription + event)
+- `eventId` (lane event id)
 - `laneId`
 - `payload`
 - `subscriptionId`
@@ -168,6 +181,22 @@ Approvals API:
 - `GET /lanes/:laneId/approvals`
 - `POST /lanes/:laneId/approvals/:approvalId/approve`
 - `POST /lanes/:laneId/approvals/:approvalId/deny`
+
+## Desktop visibility and stuck-thread notes
+
+If new bridge-started threads are not obvious in Desktop, or older ones look stuck:
+- pass explicit `repoRoot` (maps to thread `cwd`) so the thread is created in the workspace you are viewing,
+- prefer `readinessMode: "strict"` for takeover lanes that must be fully resumable,
+- check `GET /lanes/:laneId/session/status` for `readinessDeferred` and `readinessReason`,
+- call `POST /lanes/:laneId/session/stop` to gracefully interrupt active turns before shutdown (bridge now sends `turn/interrupt` on stop when possible).
+- run stale reconciliation to clear synthetic test lanes and orphaned active turn pointers:
+  - `POST /debug/reconcile-stale`
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/debug/reconcile-stale \
+  -H 'content-type: application/json' \
+  -d '{}' | jq
+```
 
 ## Verification
 

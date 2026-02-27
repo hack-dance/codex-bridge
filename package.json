@@ -12,8 +12,14 @@
   "scripts": {
     "dev": "bun run index.ts",
     "start": "bun run index.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "ultracite check",
-    "fix": "ultracite fix"
+    "fix": "ultracite fix",
+    "smoke:e2e": "bun run scripts/e2e-smoke.ts"
+  },
+  "dependencies": {
+    "@elysiajs/openapi": "^1.4.14",
+    "elysia": "^1.4.26"
   }
 }

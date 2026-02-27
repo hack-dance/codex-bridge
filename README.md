@@ -2,54 +2,191 @@
 
 Bridge service for reliable, async orchestration of Codex threads and lanes.
 
-This project runs a Bun HTTP service (`oai-app-proxy`) that:
-- tracks lane lifecycle + persistent sessions,
+`codex-bridge` runs a Bun + Elysia HTTP service (`oai-app-proxy`) that:
+- tracks lane lifecycle and persistent app-server sessions,
 - attaches/starts/steers/interrupts Codex threads,
 - emits SSE + webhook events for wake-driven orchestration,
-- handles approvals and completion payloads (including changed files).
+- handles approval requests and completion payloads,
+- exposes typed OpenAPI docs.
 
-## Why this exists
+## Session model
 
-We want deterministic orchestration from Dio/code-orchestrator:
-1. start/attach lane,
-2. start persistent session,
-3. submit prompts / steer turns,
-4. receive wakeups via webhooks,
-5. route approvals/completions without polling loops.
+For lane control-plane operations, the bridge uses one persistent app-server process per active lane:
+- initialize once per lane session,
+- keep thread/turn operations on that same live session,
+- route app-server notifications into lane events and webhook fanout.
 
-## Current status
+Session-oriented endpoints:
+- `POST /lanes/:laneId/session/start`
+- `POST /lanes/:laneId/session/stop`
+- `GET /lanes/:laneId/session/status`
+- `POST /lanes/:laneId/:action` (`prompt`, `steer`, `interrupt`)
+- `POST /codex/workflows/start-visible` (one-shot start/takeover workflow)
 
-- Service version: `v0.4`
-- Core endpoints: `/health`, `/lanes/*`, `/codex/*`, `/webhooks/*`, `/events/stream`, `/watch/*`
-- Webhook contract includes top-level envelope fields: `eventType`, `laneId`, `payload`, `subscriptionId`, `ts`.
+## Surface model (Desktop vs CLI vs VS Code)
 
-## Local run
+Surfaces are normalized to: `mac-app`, `cli`, `vscode`, `unknown`.
+
+What you can do today:
+- Prefer or filter by surface when discovering threads (`GET /codex/active`).
+- Enforce surface compatibility when taking over an existing thread (`requirePreferredSurface`).
+- Take over any known thread regardless of origin (`/lanes/attach` or `/codex/workflows/start-visible` with `threadId`).
+
+What you cannot force today:
+- Bridge cannot force a brand-new `thread/start` to be born on a specific surface. Source/surface are determined by Codex runtime behavior.
+
+## Quickstart
 
 ```bash
 bun install
 PORT=8787 bun run index.ts
 ```
 
-Health check:
-
 ```bash
 curl -s http://127.0.0.1:8787/health | jq
 ```
 
-## Example flow
+OpenAPI docs:
+- `GET /openapi`
+
+## Common operator flows
+
+### 1) Start a new managed lane + thread
 
 ```bash
-# 1) discover active threads
-curl -s 'http://127.0.0.1:8787/codex/active?windowSec=1800&preferredSurface=any' | jq
+curl -s -X POST http://127.0.0.1:8787/codex/workflows/start-visible \
+  -H 'content-type: application/json' \
+  -d '{
+    "laneId":"lane-new",
+    "title":"Bridge managed lane",
+    "kickoffPrompt":"Review current branch and summarize status",
+    "preferredSurface":"any",
+    "requirePreferredSurface":false
+  }' | jq
+```
 
-# 2) attach lane to existing thread
+This performs:
+- lane create,
+- persistent lane session start,
+- `thread/start`,
+- readiness gate (`thread/read` + `thread/resume` retries),
+- optional kickoff `turn/start`,
+- lane status -> `running`.
+
+### 2) Take over an existing Desktop App thread
+
+Discover likely desktop-active threads:
+
+```bash
+curl -s 'http://127.0.0.1:8787/codex/active?windowSec=3600&preferredSurface=mac-app&preferOriginator=Codex%20Desktop' | jq
+```
+
+Attach lane:
+
+```bash
 curl -s -X POST http://127.0.0.1:8787/lanes/attach \
   -H 'content-type: application/json' \
-  -d '{"laneId":"lane-demo","threadId":"<thread-id>","preferredSurface":"any","requirePreferredSurface":false}' | jq
-
-# 3) start lane session
-curl -s -X POST http://127.0.0.1:8787/lanes/lane-demo/session/start | jq
+  -d '{
+    "laneId":"lane-desktop",
+    "threadId":"<thread-id>",
+    "preferredSurface":"mac-app",
+    "requirePreferredSurface":true
+  }' | jq
 ```
+
+Start persistent session for that lane:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/lanes/lane-desktop/session/start | jq
+```
+
+### 3) One-shot takeover (attach + session) for an existing thread
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/codex/workflows/start-visible \
+  -H 'content-type: application/json' \
+  -d '{
+    "laneId":"lane-takeover",
+    "threadId":"<thread-id>",
+    "preferredSurface":"any",
+    "requirePreferredSurface":false
+  }' | jq
+```
+
+### 4) Drive turns remotely (desktop <-> phone handoff pattern)
+
+Use the same lane ID from any client:
+
+```bash
+# prompt
+curl -s -X POST http://127.0.0.1:8787/lanes/lane-desktop/prompt \
+  -H 'content-type: application/json' \
+  -d '{"input":"Continue from latest plan and execute tests"}' | jq
+
+# steer active turn
+curl -s -X POST http://127.0.0.1:8787/lanes/lane-desktop/steer \
+  -H 'content-type: application/json' \
+  -d '{"input":"Narrow scope to lint/type errors first"}' | jq
+
+# interrupt active turn
+curl -s -X POST http://127.0.0.1:8787/lanes/lane-desktop/interrupt \
+  -H 'content-type: application/json' \
+  -d '{}' | jq
+```
+
+## Events, approvals, and webhooks
+
+Key lane lifecycle events:
+- `lane.session.started`
+- `lane.turn.started.notification`
+- `lane.item.completed.notification`
+- `lane.turn.completed.notification`
+- `lane.completed`
+- `lane.approval.requested`
+- `lane.approval.resolved`
+
+Webhook envelope includes top-level:
+- `eventType`
+- `laneId`
+- `payload`
+- `subscriptionId`
+- `ts`
+
+Example webhook setup:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/webhooks \
+  -H 'content-type: application/json' \
+  -d '{
+    "url":"https://example.com/hook",
+    "events":["lane.session.started","lane.completed","lane.approval.requested"],
+    "enabled":true
+  }' | jq
+```
+
+Approvals API:
+- `GET /lanes/:laneId/approvals`
+- `POST /lanes/:laneId/approvals/:approvalId/approve`
+- `POST /lanes/:laneId/approvals/:approvalId/deny`
+
+## Verification
+
+```bash
+bun x ultracite check
+bun run typecheck
+bun test
+bun run smoke:e2e
+```
+
+`smoke:e2e` validates:
+- start-visible workflow and lane session lifecycle,
+- webhook delivery and `lastDeliveryAt` updates,
+- session stop path.
+
+## Additional docs
+
+- [Session + Takeover Runbook](docs/SESSION_RUNBOOK.md)
+- [Spec status](docs/SPEC_STATUS.md)
 
 ## Hack CLI integration
 
@@ -63,14 +200,11 @@ hack down
 
 ## Repo layout
 
-- `index.ts` — main Bun server + lane/session/webhook logic
-- `schema/` — protocol schemas
-- `docs/` — specs/runbooks
-- `scripts/` — utility/supervisor scripts
-- `data/` — runtime persistence (gitignored)
-
-## Safety + ops notes
-
-- Keep webhook targets authenticated and minimal.
-- Prefer fail-closed behavior when bridge preflight is unhealthy.
-- Avoid direct fallback execution paths for orchestrated tickets.
+- `index.ts` - bootstrap entrypoint (runtime init + Elysia listen)
+- `src/app.ts` - app composition + OpenAPI plugin
+- `src/modules/bridge/service.ts` - stateful runtime/session orchestration logic
+- `src/modules/*/index.ts` - feature route modules (`health`, `watch`, `webhooks`, `codex`, `lanes`, `debug`)
+- `schema/` - protocol schemas
+- `docs/` - specs and runbooks
+- `scripts/` - utility and verification scripts
+- `data/` - runtime persistence (gitignored)

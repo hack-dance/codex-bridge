@@ -1,27 +1,68 @@
-import { spawn } from 'node:child_process';
-import readline from 'node:readline';
+import { spawn } from "node:child_process";
+import readline from "node:readline";
+
+interface RpcMessage {
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: { message?: string };
+}
 
 const threadId = process.argv[2];
-if (!threadId) throw new Error('threadId required');
+if (!threadId) {
+  throw new Error("threadId required");
+}
 
-const proc = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'inherit'] });
+const proc = spawn("codex", ["app-server"], {
+  stdio: ["pipe", "pipe", "inherit"],
+});
 const rl = readline.createInterface({ input: proc.stdout });
 let id = 1;
-const pending = new Map<number, (m:any)=>void>();
+const pending = new Map<number, (message: RpcMessage) => void>();
 
-const send=(m:any)=>proc.stdin.write(JSON.stringify(m)+'\n');
-const req=(method:string,params:any={})=>new Promise<any>((resolve,reject)=>{
-  const rid=id++; pending.set(rid,resolve); send({id:rid,method,params}); setTimeout(()=>reject(new Error('timeout:'+method)),12000);
+const send = (message: Record<string, unknown>) => {
+  proc.stdin.write(`${JSON.stringify(message)}\n`);
+};
+
+const request = (method: string, params: Record<string, unknown> = {}) =>
+  new Promise<RpcMessage>((resolve, reject) => {
+    const requestId = id++;
+    pending.set(requestId, resolve);
+    send({ id: requestId, method, params });
+    setTimeout(() => reject(new Error(`timeout:${method}`)), 12_000);
+  });
+
+rl.on("line", (line) => {
+  try {
+    const message = JSON.parse(line) as RpcMessage;
+    if (typeof message.id === "number") {
+      const callback = pending.get(message.id);
+      if (callback) {
+        pending.delete(message.id);
+        callback(message);
+      }
+    } else {
+      console.log("NOTIFY", JSON.stringify(message));
+    }
+  } catch {
+    // ignore parse errors from non-JSON lines
+  }
 });
 
-rl.on('line',line=>{try{const m=JSON.parse(line); if(typeof m.id==='number'){const cb=pending.get(m.id); if(cb){pending.delete(m.id);cb(m)}} else { console.log('NOTIFY', JSON.stringify(m)); }}catch{}});
-
-(async()=>{
-  const init=await req('initialize',{clientInfo:{name:'probe-turn',title:'probe-turn',version:'0.1'}});
-  if(init.error) throw new Error(init.error.message);
-  send({method:'initialized',params:{}});
-  const res=await req('turn/start',{threadId,input:[{type:'text',text:'Reply with exactly OK'}]});
-  console.log('TURN_START_RES', JSON.stringify(res));
-  await new Promise(r=>setTimeout(r,8000));
-  proc.kill('SIGTERM');
+(async () => {
+  const init = await request("initialize", {
+    clientInfo: { name: "probe-turn", title: "probe-turn", version: "0.1" },
+  });
+  if (init.error) {
+    throw new Error(init.error.message);
+  }
+  send({ method: "initialized", params: {} });
+  const response = await request("turn/start", {
+    threadId,
+    input: [{ type: "text", text: "Reply with exactly OK" }],
+  });
+  console.log("TURN_START_RES", JSON.stringify(response));
+  await new Promise((resolve) => setTimeout(resolve, 8000));
+  proc.kill("SIGTERM");
 })();

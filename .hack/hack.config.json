@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.hack/hack.config.schema.json",
   "name": "codex-bridge",
-  "dev_host": "codex-bridge.hack",
+  "dev_host": "codex-gateway.hack",
   "logs": {
     "follow_backend": "compose",
     "snapshot_backend": "loki",
@@ -12,7 +12,7 @@
     "tls": true
   },
   "oauth": {
-    "enabled": false,
+    "enabled": true,
     "tld": "gy"
   }
 }

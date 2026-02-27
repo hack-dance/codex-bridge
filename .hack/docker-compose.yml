@@ -10,7 +10,7 @@ services:
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
     labels:
-      caddy: codex-bridge.hack
+      caddy: codex-gateway.hack, codex-gateway.hack.gy
       caddy.reverse_proxy: "{{upstreams 3000}}"
       caddy.tls: internal
     networks:

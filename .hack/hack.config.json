@@ -1,12 +1,13 @@
 {
   "$schema": "https://schemas.hack/hack.config.schema.json",
   "name": "codex-bridge",
-  "dev_host": "codex-gateway.hack",
+  "dev_host": "codex-gateway",
   "logs": {
     "follow_backend": "compose",
     "snapshot_backend": "loki",
     "clear_on_down": false
   },
+
   "internal": {
     "dns": true,
     "tls": true
@@ -14,5 +15,29 @@
   "oauth": {
     "enabled": true,
     "tld": "gy"
+  },
+  "lifecycle": {
+    "up": {
+      "before": [
+        {
+          "name": "cleanup-stale-codex-app-server-ws",
+          "command": "sh -lc 'pid=$(lsof -tiTCP:8788 -sTCP:LISTEN || true); [ -n \"$pid\" ] && kill \"$pid\" || true'"
+        }
+      ]
+    },
+    "down": {
+      "after": [
+        {
+          "name": "stop-codex-app-server-ws",
+          "command": "sh -lc 'pid=$(lsof -tiTCP:8788 -sTCP:LISTEN || true); [ -n \"$pid\" ] && kill \"$pid\" || true'"
+        }
+      ]
+    },
+    "processes": [
+      {
+        "name": "codex-app-server-ws",
+        "command": "codex app-server --listen ws://0.0.0.0:8788"
+      }
+    ]
   }
 }

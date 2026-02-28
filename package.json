@@ -11,6 +11,8 @@
   },
   "scripts": {
     "dev": "bun run index.ts",
+    "dev:dashboard": "NODE_OPTIONS=--use-system-ca bun run --cwd dashboard dev",
+    "build:dashboard": "bun run --cwd dashboard build",
     "start": "bun run index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

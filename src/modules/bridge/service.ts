@@ -5,6 +5,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -95,6 +96,11 @@ interface WebhookSubscription {
   url: string;
   events: string[];
   enabled: boolean;
+  scope?: {
+    laneIds: string[];
+    threadIds: string[];
+    sessionIds: string[];
+  };
   secret?: string;
   createdAt: string;
   updatedAt: string;
@@ -315,6 +321,41 @@ async function persistLane(lane: Lane) {
   );
 }
 
+async function deleteLane(laneId: string) {
+  const lane = lanes.get(laneId);
+  if (!lane) {
+    return {
+      ok: false as const,
+      error: "lane_not_found" as const,
+    };
+  }
+
+  const hadSession = laneSessions.has(laneId);
+  if (hadSession) {
+    await stopLaneSession(laneId);
+  }
+
+  const laneThreadId = lane.threadId;
+  lanes.delete(laneId);
+  approvals.delete(laneId);
+  laneEvents.delete(laneId);
+  watcherMissingThreadCounts.delete(laneId);
+  clearThreadLaneMappingsForLane(laneId);
+
+  if (laneThreadId) {
+    attachedThreadLastUpdated.delete(laneThreadId);
+  }
+
+  await unlink(join(laneDir, `${laneId}.json`)).catch(() => undefined);
+  await unlink(join(eventDir, `${laneId}.jsonl`)).catch(() => undefined);
+
+  return {
+    ok: true as const,
+    lane,
+    hadSession,
+  };
+}
+
 async function emitEvent(event: LaneEvent) {
   const events = laneEvents.get(event.laneId) ?? [];
   events.push(event);
@@ -366,6 +407,79 @@ function eventMatches(pattern: string, eventType: string) {
     return eventType.startsWith(pattern.slice(0, -1));
   }
   return pattern === eventType;
+}
+
+function normalizeWebhookTargetIds(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const dedup = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    dedup.add(trimmed);
+  }
+  return [...dedup];
+}
+
+function normalizeWebhookScope(
+  scope: unknown
+): WebhookSubscription["scope"] | undefined {
+  if (!scope || typeof scope !== "object") {
+    return undefined;
+  }
+  const raw = scope as Record<string, unknown>;
+  const normalized = {
+    laneIds: normalizeWebhookTargetIds(raw.laneIds),
+    threadIds: normalizeWebhookTargetIds(raw.threadIds),
+    sessionIds: normalizeWebhookTargetIds(raw.sessionIds),
+  };
+  if (
+    normalized.laneIds.length === 0 &&
+    normalized.threadIds.length === 0 &&
+    normalized.sessionIds.length === 0
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function webhookMatchesScope({
+  subscription,
+  laneId,
+  threadId,
+  sessionId,
+}: {
+  subscription: WebhookSubscription;
+  laneId: string;
+  threadId: string | null;
+  sessionId: string | null;
+}) {
+  const scope = normalizeWebhookScope(subscription.scope);
+  if (!scope) {
+    return true;
+  }
+  if (scope.laneIds.length > 0 && !scope.laneIds.includes(laneId)) {
+    return false;
+  }
+  if (
+    scope.threadIds.length > 0 &&
+    (!threadId || !scope.threadIds.includes(threadId))
+  ) {
+    return false;
+  }
+  if (
+    scope.sessionIds.length > 0 &&
+    (!sessionId || !scope.sessionIds.includes(sessionId))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function codexBinary() {
@@ -434,8 +548,28 @@ async function persistWebhooks() {
 }
 
 async function dispatchWebhooks(event: LaneEvent) {
+  const payloadThreadId =
+    typeof event.payload?.threadId === "string"
+      ? event.payload.threadId
+      : undefined;
+  const laneThreadId = lanes.get(event.laneId)?.threadId;
+  const eventThreadId = payloadThreadId ?? laneThreadId ?? null;
+  const payloadSessionId =
+    typeof event.payload?.sessionId === "string"
+      ? event.payload.sessionId
+      : undefined;
+  const eventSessionId = payloadSessionId ?? event.laneId;
+
   const subs = [...webhookSubscriptions.values()].filter(
-    (w) => w.enabled && w.events.some((e) => eventMatches(e, event.type))
+    (w) =>
+      w.enabled &&
+      w.events.some((e) => eventMatches(e, event.type)) &&
+      webhookMatchesScope({
+        subscription: w,
+        laneId: event.laneId,
+        threadId: eventThreadId,
+        sessionId: eventSessionId,
+      })
   );
   if (!subs.length) {
     return;
@@ -453,6 +587,9 @@ async function dispatchWebhooks(event: LaneEvent) {
         subscriptionId: sub.id,
         eventType: event.type,
         laneId: event.laneId,
+        threadId: eventThreadId,
+        sessionId: eventSessionId,
+        scope: normalizeWebhookScope(sub.scope) ?? null,
         payload: event.payload ?? {},
         event,
       };
@@ -1292,7 +1429,10 @@ async function restoreFromDisk() {
         subscriptions?: WebhookSubscription[];
       };
       for (const sub of parsed.subscriptions ?? []) {
-        webhookSubscriptions.set(sub.id, sub);
+        webhookSubscriptions.set(sub.id, {
+          ...sub,
+          scope: normalizeWebhookScope(sub.scope),
+        });
       }
     } catch {
       // ignore invalid webhook file
@@ -1302,11 +1442,17 @@ async function restoreFromDisk() {
 
 async function codexRpc(method: string, params: Record<string, unknown> = {}) {
   const proc = spawn(codexBinary(), ["app-server"], {
-    stdio: ["pipe", "pipe", "ignore"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   const rl = readline.createInterface({ input: proc.stdout });
 
   let seq = 1;
+  const stderrLines: string[] = [];
+
+  const summarizeStderr = () => {
+    const combined = stderrLines.join("");
+    return combined.length > 0 ? combined.slice(0, 8_000) : undefined;
+  };
   const pending = new Map<
     number,
     {
@@ -1326,6 +1472,14 @@ async function codexRpc(method: string, params: Record<string, unknown> = {}) {
 
   proc.on("error", (err) => {
     settleAll(new Error(`codex_spawn_failed:${(err as Error).message}`));
+  });
+  proc.stderr.on("data", (chunk) => {
+    const text = String(chunk);
+    if (!text.trim()) {
+      return;
+    }
+    stderrLines.push(text);
+    debugLog("codex_rpc_stderr", { method, chunk: text.slice(0, 1024) });
   });
 
   const send = (payload: Record<string, unknown>) => {
@@ -1390,8 +1544,15 @@ async function codexRpc(method: string, params: Record<string, unknown> = {}) {
     }
     return res?.result ?? {};
   } catch (error) {
-    settleAll(error as Error);
-    throw error;
+    const err = error instanceof Error
+      ? error
+      : new Error(String(error));
+    const stderr = summarizeStderr();
+    if (stderr) {
+      err.message = `${err.message}; codex_stderr=${stderr}`;
+    }
+    settleAll(err);
+    throw err;
   } finally {
     clearTimeout(hardTimer);
     try {
@@ -1629,7 +1790,7 @@ async function codexInterruptThread(threadId: string, turnId?: string) {
 }
 
 async function detectRunningCodexSessions() {
-  const threads = await listCodexThreads(100).catch(() => [] as CodexThread[]);
+  const threads = await listCodexThreads(25).catch(() => [] as CodexThread[]);
   const byId = new Map(threads.map((t) => [t.id, t]));
 
   const psOut = await Bun.$`ps -axo pid=,command=`.text();
@@ -1957,6 +2118,7 @@ export const bridgeRuntime = {
   persistWebhooks,
   runWatcherTick,
   setLaneStatus,
+  deleteLane,
   startLaneSession,
   startWatcher,
   stopLaneSession,

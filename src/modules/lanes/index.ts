@@ -68,6 +68,14 @@ const lanePromptBody = t.Object({
   input: t.Optional(t.String()),
 });
 
+const laneCleanupBody = t.Object({
+  statuses: t.Optional(t.Array(t.String())),
+  olderThanHours: t.Optional(t.Numeric()),
+  syntheticOnly: t.Optional(t.Boolean()),
+  limit: t.Optional(t.Numeric()),
+  dryRun: t.Optional(t.Boolean()),
+});
+
 type LaneAction = "prompt" | "steer" | "interrupt";
 
 interface LaneActionBodyInput {
@@ -83,6 +91,18 @@ interface LaneActionErrorPayload {
   error: string;
   message?: string;
 }
+
+const knownLaneStatuses = new Set<string>([
+  "idle",
+  "starting",
+  "running",
+  "needs_approval",
+  "blocked",
+  "verifying",
+  "done",
+  "failed",
+  "interrupted",
+]);
 
 class LaneActionError extends Error {
   statusCode: number;
@@ -156,6 +176,24 @@ const isSurfaceMismatch = ({
   requirePreferredSurface &&
   preferredSurface !== "any" &&
   detectedSurface !== preferredSurface;
+
+const parseCleanupStatuses = ({
+  statuses,
+}: {
+  statuses?: string[];
+}): string[] => {
+  if (!statuses) {
+    return [];
+  }
+  return statuses
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0 && knownLaneStatuses.has(value));
+};
+
+const laneUpdatedAtMs = ({ lane }: { lane: Lane }): number => {
+  const parsed = Date.parse(lane.updatedAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
 
 async function requestLaneTurnStart({
   payload,
@@ -375,6 +413,117 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
       tags: ["lanes"],
     },
   })
+  .get(
+    "/lanes/sessions",
+    () => {
+      const sessions = [...runtime.lanes.values()].map((lane) => {
+        const session = runtime.laneSessions.get(lane.laneId);
+        return {
+          laneId: lane.laneId,
+          threadId: lane.threadId ?? null,
+          running: !!session,
+          startedAt: session?.startedAt ?? null,
+          pendingRequests: session ? session.serverRequests.size : 0,
+          activeTurnId: lane.activeTurnId ?? null,
+          readinessMode: lane.readinessMode ?? "lenient",
+          readinessDeferred: session?.readinessDeferred ?? false,
+          readinessReason: session?.readinessReason ?? null,
+        };
+      });
+      return {
+        sessions,
+        count: sessions.length,
+        runningCount: sessions.filter((entry) => entry.running).length,
+      };
+    },
+    {
+      detail: {
+        summary: "List lane session states",
+        tags: ["lanes", "sessions"],
+      },
+    }
+  )
+  .post(
+    "/lanes/cleanup",
+    async ({ body }) => {
+      const dryRun = body.dryRun === true;
+      const syntheticOnly = body.syntheticOnly === true;
+      const olderThanHours = Math.max(0, Number(body.olderThanHours ?? 24));
+      const olderThanMs = olderThanHours * 60 * 60 * 1000;
+      const nowMs = Date.now();
+      const limit = Math.max(1, Math.min(500, Number(body.limit ?? 100)));
+      const statuses = parseCleanupStatuses({
+        statuses: body.statuses?.map((value) => String(value)),
+      });
+
+      const selected = [...runtime.lanes.values()]
+        .filter(
+          (lane) => statuses.length === 0 || statuses.includes(lane.status)
+        )
+        .filter((lane) => {
+          if (!syntheticOnly) {
+            return true;
+          }
+          return lane.threadId
+            ? runtime.isSyntheticThreadId(lane.threadId)
+            : false;
+        })
+        .filter((lane) => nowMs - laneUpdatedAtMs({ lane }) >= olderThanMs)
+        .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+        .slice(0, limit);
+
+      const targetLanes = selected.map((lane) => ({
+        laneId: lane.laneId,
+        status: lane.status,
+        threadId: lane.threadId ?? null,
+        updatedAt: lane.updatedAt,
+      }));
+
+      if (dryRun) {
+        return {
+          ok: true,
+          dryRun: true,
+          count: targetLanes.length,
+          targetLanes,
+        };
+      }
+
+      const deleted: typeof targetLanes = [];
+      const failed: Array<{ laneId: string; error: string }> = [];
+
+      for (const lane of selected) {
+        const result = await runtime.deleteLane(lane.laneId);
+        if (result.ok) {
+          deleted.push({
+            laneId: lane.laneId,
+            status: lane.status,
+            threadId: lane.threadId ?? null,
+            updatedAt: lane.updatedAt,
+          });
+        } else {
+          failed.push({
+            laneId: lane.laneId,
+            error: result.error,
+          });
+        }
+      }
+
+      return {
+        ok: true,
+        dryRun: false,
+        count: deleted.length,
+        deleted,
+        failed,
+      };
+    },
+    {
+      detail: {
+        summary: "Bulk cleanup lanes by age and status",
+        tags: ["lanes", "maintenance"],
+      },
+      body: laneCleanupBody,
+    }
+  )
   .post(
     "/lanes/attach",
     async ({ body, status }) => {
@@ -575,6 +724,27 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
       detail: {
         summary: "Sync lane metadata from Codex thread",
         tags: ["lanes"],
+      },
+      params: laneIdParams,
+    }
+  )
+  .delete(
+    "/lanes/:laneId",
+    async ({ params, status }) => {
+      const result = await runtime.deleteLane(params.laneId);
+      if (!result.ok) {
+        return status(404, { error: "lane_not_found" });
+      }
+      return {
+        ok: true,
+        deletedLaneId: params.laneId,
+        hadSession: result.hadSession,
+      };
+    },
+    {
+      detail: {
+        summary: "Delete lane and cleanup local state",
+        tags: ["lanes", "maintenance"],
       },
       params: laneIdParams,
     }

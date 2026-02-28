@@ -82,6 +82,10 @@ const codexActiveQuery = t.Object({
   preferredSurface: t.Optional(t.String()),
 });
 
+const runningFallbackWindowSec = 4 * 60 * 60;
+const runningFallbackSourceKinds = ["vscode", "cli", "exec", "appServer"];
+const runningFallbackLimit = 50;
+
 async function runThreadAction({
   threadId,
   operation,
@@ -108,6 +112,32 @@ async function runThreadAction({
     threadId,
     result,
   };
+}
+
+function inferRunningSessionsFromThreads(threads: CodexThread[]) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  return threads
+    .filter(
+      (thread) =>
+        typeof thread.updatedAt === "number" &&
+        nowSec - thread.updatedAt <= runningFallbackWindowSec
+    )
+    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+    .slice(0, runningFallbackLimit)
+    .map((thread) => ({
+      pid: null,
+      threadId: thread.id,
+      path: thread.path ?? null,
+      cwd: thread.cwd ?? null,
+      preview: thread.preview ?? null,
+      updatedAt: thread.updatedAt ?? null,
+      source: thread.source ?? null,
+      surface: thread.surface ?? "unknown",
+      originator: thread.originator ?? null,
+      inferred: true,
+      inferredFrom: "recent_thread_activity",
+      inferredWindowSec: runningFallbackWindowSec,
+    }));
 }
 
 type PreferredSurface = NonNullable<Lane["preferredSurface"]>;
@@ -1089,7 +1119,27 @@ export const codexModule = new Elysia({ name: "codex-module" })
     async ({ status }) => {
       try {
         const sessions = await runtime.detectRunningCodexSessions();
-        return { sessions, count: sessions.length };
+        if (sessions.length > 0) {
+          return {
+            sessions,
+            count: sessions.length,
+            detectionMode: "process",
+            inferred: false,
+          };
+        }
+
+        const threads = await runtime.listCodexThreads(
+          200,
+          runningFallbackSourceKinds
+        );
+        const inferredSessions = inferRunningSessionsFromThreads(threads);
+        return {
+          sessions: inferredSessions,
+          count: inferredSessions.length,
+          detectionMode: "thread_inference",
+          inferred: true,
+          inferredWindowSec: runningFallbackWindowSec,
+        };
       } catch (error) {
         return status(502, {
           error: "codex_running_detect_failed",

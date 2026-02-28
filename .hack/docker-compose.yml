@@ -2,11 +2,16 @@ name: codex-bridge
 services:
   app:
     image: imbios/bun-node:latest
+    platform: linux/arm64/v8
     working_dir: /app
     volumes:
       - ..:/app
-    command: bun run dev -- --port 3000 --host 0.0.0.0
+    command: sh -lc "bun run dev -- --port 3000 --host 0.0.0.0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
+      CODEX_BIN: "/app/scripts/codex-bin.sh"
+      CODEX_APP_SERVER_WS_URL: ${CODEX_APP_SERVER_WS_URL:-ws://host.docker.internal:8788}
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
     labels:

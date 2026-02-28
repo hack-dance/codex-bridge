@@ -22,5 +22,8 @@
     "strictFunctionTypes": true,
     "noImplicitAny": true,
     "types": ["bun", "node"]
-  }
+  },
+  "exclude": [
+    "dashboard"
+  ]
 }

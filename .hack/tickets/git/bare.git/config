@@ -1,0 +1,10 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = true
+	ignorecase = true
+	precomposeunicode = true
+	sparseCheckout = true
+[remote "origin"]
+	url = git@github.com:hack-dance/codex-bridge.git
+	fetch = +refs/heads/*:refs/remotes/origin/*

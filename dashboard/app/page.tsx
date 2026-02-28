@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   Activity,
@@ -10,9 +10,9 @@ import {
   SquareTerminal,
   Waves,
   Zap,
-} from "lucide-react"
-import Link from "next/link"
-import { useMemo, useState } from "react"
+} from "lucide-react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 
 import {
   ActionButton,
@@ -24,9 +24,9 @@ import {
   RowActionMenuButton,
   RowActionMenuLink,
   StatCard,
-} from "@/components/hud-primitives"
-import { LaneModelPrimer } from "@/components/lane-model-primer"
-import type { DashboardIssue } from "@/lib/dashboard-data"
+} from "@/components/hud-primitives";
+import { LaneModelPrimer } from "@/components/lane-model-primer";
+import type { DashboardIssue } from "@/lib/dashboard-data";
 import {
   formatIso,
   laneOwnershipClassName,
@@ -34,48 +34,57 @@ import {
   toDisplayValue,
   webhookHealth,
   webhookHealthClassName,
-} from "@/lib/dashboard-ui"
-import { runDashboardAction, useDashboardSnapshot } from "@/lib/use-dashboard-snapshot"
+} from "@/lib/dashboard-ui";
+import {
+  runDashboardAction,
+  useDashboardSnapshot,
+} from "@/lib/use-dashboard-snapshot";
 
-const issueClassName = ({ severity }: { severity: DashboardIssue["severity"] }): string => {
+const issueClassName = ({
+  severity,
+}: {
+  severity: DashboardIssue["severity"];
+}): string => {
   if (severity === "error") {
-    return "bg-rose-100 text-rose-800"
+    return "bg-rose-100 text-rose-800";
   }
   if (severity === "warn") {
-    return "bg-amber-100 text-amber-800"
+    return "bg-amber-100 text-amber-800";
   }
-  return "bg-zinc-100 text-zinc-700"
-}
+  return "bg-zinc-100 text-zinc-700";
+};
 
 export default function HomePage() {
-  const { snapshot, error, isLoading, isRefreshing, refreshSnapshot } = useDashboardSnapshot()
-  const [actionMessage, setActionMessage] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null)
+  const { snapshot, error, isLoading, isRefreshing, refreshSnapshot } =
+    useDashboardSnapshot();
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
 
   const runAction = async ({
     payload,
     actionKey,
     successMessage,
   }: {
-    payload: Record<string, unknown>
-    actionKey: string
-    successMessage: string
+    payload: Record<string, unknown>;
+    actionKey: string;
+    successMessage: string;
   }) => {
-    setPendingActionKey(actionKey)
-    setActionError(null)
-    setActionMessage(null)
+    setPendingActionKey(actionKey);
+    setActionError(null);
+    setActionMessage(null);
     try {
-      await runDashboardAction({ payload })
-      setActionMessage(successMessage)
-      await refreshSnapshot({ isPoll: false })
+      await runDashboardAction({ payload });
+      setActionMessage(successMessage);
+      await refreshSnapshot({ isPoll: false });
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : "Action failed"
-      setActionError(message)
+      const message =
+        requestError instanceof Error ? requestError.message : "Action failed";
+      setActionError(message);
     } finally {
-      setPendingActionKey(null)
+      setPendingActionKey(null);
     }
-  }
+  };
 
   const lanes = useMemo(
     () =>
@@ -84,67 +93,100 @@ export default function HomePage() {
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         .slice(0, 10) ?? [],
     [snapshot?.lanes]
-  )
-  const topIssues = useMemo(() => snapshot?.issues.slice(0, 8) ?? [], [snapshot?.issues])
-  const activeThreads = useMemo(() => snapshot?.activeThreads.slice(0, 10) ?? [], [snapshot?.activeThreads])
-  const webhookItems = useMemo(() => snapshot?.webhooks.slice(0, 10) ?? [], [snapshot?.webhooks])
+  );
+  const topIssues = useMemo(
+    () => snapshot?.issues.slice(0, 8) ?? [],
+    [snapshot?.issues]
+  );
+  const activeThreads = useMemo(
+    () => snapshot?.activeThreads.slice(0, 10) ?? [],
+    [snapshot?.activeThreads]
+  );
+  const webhookItems = useMemo(
+    () => snapshot?.webhooks.slice(0, 10) ?? [],
+    [snapshot?.webhooks]
+  );
   const threadById = useMemo(
-    () => new Map((snapshot?.threads ?? []).map((thread) => [thread.id, thread])),
+    () =>
+      new Map((snapshot?.threads ?? []).map((thread) => [thread.id, thread])),
     [snapshot?.threads]
-  )
+  );
 
   return (
     <div className="flex w-full flex-col gap-6">
-      <header className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 shadow-lg shadow-black/20 backdrop-blur-sm">
+      <header className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 shadow-black/20 shadow-lg backdrop-blur-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="mono text-xs uppercase tracking-[0.2em] text-zinc-500">Overview</p>
-            <h1 className="mt-1 text-3xl font-semibold">Codex Bridge Operations</h1>
+            <p className="mono text-xs text-zinc-500 uppercase tracking-[0.2em]">
+              Overview
+            </p>
+            <h1 className="mt-1 font-semibold text-3xl">
+              Codex Bridge Operations
+            </h1>
             <p className="mt-2 max-w-3xl text-sm text-zinc-400">
-              Live view of lanes, thread activity, webhook coverage, and runtime health.
+              Live view of lanes, thread activity, webhook coverage, and runtime
+              health.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <ActionButton
-              label={isRefreshing ? "Refreshing..." : "Refresh"}
-              icon={isRefreshing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
               busy={isRefreshing}
+              icon={
+                isRefreshing ? (
+                  <Loader2 className="animate-spin" size={14} />
+                ) : (
+                  <RefreshCw size={14} />
+                )
+              }
+              label={isRefreshing ? "Refreshing..." : "Refresh"}
               onClick={() => {
-                refreshSnapshot({ isPoll: false }).catch(() => undefined)
+                refreshSnapshot({ isPoll: false }).catch(() => undefined);
               }}
             />
             <ActionButton
-              label="Reconcile stale"
-              icon={<Sparkles size={14} />}
               busy={pendingActionKey === "reconcile-stale"}
+              icon={<Sparkles size={14} />}
+              label="Reconcile stale"
               onClick={() => {
                 runAction({
                   actionKey: "reconcile-stale",
                   successMessage: "Reconciled stale lanes",
                   payload: { action: "reconcile-stale" },
-                }).catch(() => undefined)
+                }).catch(() => undefined);
               }}
             />
             <ActionButton
-              label={snapshot?.watch?.running ? "Stop watcher" : "Start watcher"}
-              icon={<Waves size={14} />}
               busy={pendingActionKey === "watch-toggle"}
+              icon={<Waves size={14} />}
+              label={
+                snapshot?.watch?.running ? "Stop watcher" : "Start watcher"
+              }
               onClick={() => {
                 runAction({
                   actionKey: "watch-toggle",
-                  successMessage: snapshot?.watch?.running ? "Watcher stopped" : "Watcher started",
+                  successMessage: snapshot?.watch?.running
+                    ? "Watcher stopped"
+                    : "Watcher started",
                   payload: {
-                    action: snapshot?.watch?.running ? "watch-stop" : "watch-start",
+                    action: snapshot?.watch?.running
+                      ? "watch-stop"
+                      : "watch-start",
                   },
-                }).catch(() => undefined)
+                }).catch(() => undefined);
               }}
             />
           </div>
         </div>
 
         <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-          <ConnectionBadge label="Bridge" value={snapshot?.connections.bridgeHealthy === true} />
-          <ConnectionBadge label="Watcher" value={snapshot?.connections.watcherRunning === true} />
+          <ConnectionBadge
+            label="Bridge"
+            value={snapshot?.connections.bridgeHealthy === true}
+          />
+          <ConnectionBadge
+            label="Watcher"
+            value={snapshot?.connections.watcherRunning === true}
+          />
           <ConnectionBadge
             label="Threads endpoint"
             value={snapshot?.connections.codexThreadEndpointReachable === true}
@@ -153,7 +195,10 @@ export default function HomePage() {
             label="Running endpoint"
             value={snapshot?.connections.codexRunningEndpointReachable === true}
           />
-          <ConnectionBadge label="Active threads" value={snapshot?.connections.hasActiveThreads === true} />
+          <ConnectionBadge
+            label="Active threads"
+            value={snapshot?.connections.hasActiveThreads === true}
+          />
           <ConnectionBadge
             label="Running sessions"
             value={snapshot?.connections.hasRunningCodexSessions === true}
@@ -161,24 +206,44 @@ export default function HomePage() {
         </div>
       </header>
 
-      {error ? <Banner tone="error" text={error} /> : null}
-      {actionError ? <Banner tone="error" text={actionError} /> : null}
-      {actionMessage ? <Banner tone="success" text={actionMessage} /> : null}
+      {error ? <Banner text={error} tone="error" /> : null}
+      {actionError ? <Banner text={actionError} tone="error" /> : null}
+      {actionMessage ? <Banner text={actionMessage} tone="success" /> : null}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <StatCard title="Lanes" value={snapshot?.stats.lanesTotal ?? 0} subtitle="All managed lanes" />
-        <StatCard title="Running" value={snapshot?.stats.lanesRunning ?? 0} subtitle="Lane status: running" />
         <StatCard
+          subtitle="All managed lanes"
+          title="Lanes"
+          value={snapshot?.stats.lanesTotal ?? 0}
+        />
+        <StatCard
+          subtitle="Lane status: running"
+          title="Running"
+          value={snapshot?.stats.lanesRunning ?? 0}
+        />
+        <StatCard
+          subtitle="Blocked by approval"
           title="Needs Approval"
           value={snapshot?.stats.lanesNeedsApproval ?? 0}
-          subtitle="Blocked by approval"
         />
-        <StatCard title="Webhooks" value={snapshot?.stats.webhooksTotal ?? 0} subtitle="Subscriptions total" />
-        <StatCard title="Threads" value={snapshot?.stats.threadsTotal ?? 0} subtitle="Threads indexed" />
         <StatCard
+          subtitle="Subscriptions total"
+          title="Webhooks"
+          value={snapshot?.stats.webhooksTotal ?? 0}
+        />
+        <StatCard
+          subtitle="Threads indexed"
+          title="Threads"
+          value={snapshot?.stats.threadsTotal ?? 0}
+        />
+        <StatCard
+          subtitle={
+            snapshot?.runningDetection.inferred
+              ? "Inferred mode"
+              : "Process mode"
+          }
           title="Sessions"
           value={snapshot?.stats.runningSessions ?? 0}
-          subtitle={snapshot?.runningDetection.inferred ? "Inferred mode" : "Process mode"}
         />
       </section>
 
@@ -186,13 +251,16 @@ export default function HomePage() {
 
       <section className="grid gap-6 xl:grid-cols-2">
         <Panel
-          title="Lane Activity"
-          description="Lanes are execution rails attached to threads; session runtime is managed per lane."
           actions={
-            <Link href="/lanes" className="text-xs text-zinc-400 hover:text-zinc-200">
+            <Link
+              className="text-xs text-zinc-400 hover:text-zinc-200"
+              href="/lanes"
+            >
               open lanes →
             </Link>
           }
+          description="Lanes are execution rails attached to threads; session runtime is managed per lane."
+          title="Lane Activity"
         >
           {isLoading && !snapshot ? (
             <p className="text-sm text-zinc-400">Loading lanes...</p>
@@ -201,7 +269,7 @@ export default function HomePage() {
           ) : (
             <div className="max-h-[360px] overflow-auto rounded-lg border border-zinc-800">
               <table className="min-w-full divide-y divide-zinc-800 text-sm">
-                <thead className="sticky top-0 bg-zinc-900/95 text-left text-xs uppercase tracking-wide text-zinc-500">
+                <thead className="sticky top-0 bg-zinc-900/95 text-left text-xs text-zinc-500 uppercase tracking-wide">
                   <tr>
                     <th className="px-3 py-2">Lane</th>
                     <th className="px-3 py-2">Thread</th>
@@ -214,26 +282,31 @@ export default function HomePage() {
                 </thead>
                 <tbody className="divide-y divide-zinc-800/70">
                   {lanes.map((lane) => (
-                    <tr key={lane.laneId} className="hover:bg-zinc-900/60">
+                    <tr className="hover:bg-zinc-900/60" key={lane.laneId}>
                       <td className="px-3 py-2">
                         <Link
-                          href={`/lanes?search=${encodeURIComponent(lane.laneId)}`}
                           className="block text-xs text-zinc-200 hover:text-zinc-50"
+                          href={`/lanes?search=${encodeURIComponent(lane.laneId)}`}
                         >
                           {lane.displayName}
                         </Link>
-                        <p className="mono mt-1 text-[11px] text-zinc-500">{lane.laneId}</p>
+                        <p className="mono mt-1 text-[11px] text-zinc-500">
+                          {lane.laneId}
+                        </p>
                       </td>
                       <td className="px-3 py-2">
                         {lane.threadId ? (
                           <div>
                             <Link
-                              href={`/threads?search=${encodeURIComponent(lane.threadId)}`}
                               className="text-xs text-zinc-300 hover:text-zinc-100"
+                              href={`/threads?search=${encodeURIComponent(lane.threadId)}`}
                             >
-                              {threadById.get(lane.threadId)?.displayName ?? lane.threadId}
+                              {threadById.get(lane.threadId)?.displayName ??
+                                lane.threadId}
                             </Link>
-                            <p className="mono mt-1 text-[11px] text-zinc-500">{lane.threadId}</p>
+                            <p className="mono mt-1 text-[11px] text-zinc-500">
+                              {lane.threadId}
+                            </p>
                           </div>
                         ) : (
                           <span className="text-xs text-zinc-500">—</span>
@@ -241,27 +314,42 @@ export default function HomePage() {
                       </td>
                       <td className="px-3 py-2">
                         <span
-                          className={`inline-flex rounded px-2 py-0.5 text-xs font-semibold ${laneOwnershipClassName({
-                            ownershipType: lane.ownershipType,
-                          })}`}
+                          className={`inline-flex rounded px-2 py-0.5 font-semibold text-xs ${laneOwnershipClassName(
+                            {
+                              ownershipType: lane.ownershipType,
+                            }
+                          )}`}
                         >
                           {lane.ownershipLabel}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-xs text-zinc-400">{lane.projectName ?? "unknown"}</td>
-                      <td className="px-3 py-2 text-xs text-zinc-300">{lane.status}</td>
-                      <td className="px-3 py-2 text-xs text-zinc-500">{formatIso({ value: lane.updatedAt })}</td>
+                      <td className="px-3 py-2 text-xs text-zinc-400">
+                        {lane.projectName ?? "unknown"}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-zinc-300">
+                        {lane.status}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-zinc-500">
+                        {formatIso({ value: lane.updatedAt })}
+                      </td>
                       <td className="px-3 py-2">
-                        <RowActionMenu label={`Actions for lane ${lane.displayName}`}>
+                        <RowActionMenu
+                          label={`Actions for lane ${lane.displayName}`}
+                        >
                           <RowActionMenuButton
+                            busy={
+                              pendingActionKey === `lane-sync:${lane.laneId}`
+                            }
                             label="Sync lane"
-                            busy={pendingActionKey === `lane-sync:${lane.laneId}`}
                             onClick={() => {
                               runAction({
                                 actionKey: `lane-sync:${lane.laneId}`,
                                 successMessage: `Lane ${lane.laneId} synced`,
-                                payload: { action: "lane-sync", laneId: lane.laneId },
-                              }).catch(() => undefined)
+                                payload: {
+                                  action: "lane-sync",
+                                  laneId: lane.laneId,
+                                },
+                              }).catch(() => undefined);
                             }}
                           />
                           <RowActionMenuLink
@@ -279,17 +367,21 @@ export default function HomePage() {
         </Panel>
 
         <Panel
-          title="Thread + Session Signal"
-          description="Active thread feed and running session detection state."
           actions={
-            <Link href="/threads" className="text-xs text-zinc-400 hover:text-zinc-200">
+            <Link
+              className="text-xs text-zinc-400 hover:text-zinc-200"
+              href="/threads"
+            >
               open threads →
             </Link>
           }
+          description="Active thread feed and running session detection state."
+          title="Thread + Session Signal"
         >
           <div className="mb-2 flex items-center gap-2 text-xs text-zinc-500">
             <SquareTerminal size={12} />
-            detection mode: {snapshot?.runningDetection.detectionMode ?? "unknown"}
+            detection mode:{" "}
+            {snapshot?.runningDetection.detectionMode ?? "unknown"}
             {snapshot?.runningDetection.inferred ? " (inferred)" : ""}
           </div>
           {activeThreads.length === 0 ? (
@@ -297,7 +389,7 @@ export default function HomePage() {
           ) : (
             <div className="max-h-[360px] overflow-auto rounded-lg border border-zinc-800">
               <table className="min-w-full divide-y divide-zinc-800 text-sm">
-                <thead className="sticky top-0 bg-zinc-900/95 text-left text-xs uppercase tracking-wide text-zinc-500">
+                <thead className="sticky top-0 bg-zinc-900/95 text-left text-xs text-zinc-500 uppercase tracking-wide">
                   <tr>
                     <th className="px-3 py-2">Thread</th>
                     <th className="px-3 py-2">Origin / Source</th>
@@ -308,15 +400,17 @@ export default function HomePage() {
                 </thead>
                 <tbody className="divide-y divide-zinc-800/70">
                   {activeThreads.map((thread) => (
-                    <tr key={thread.id} className="hover:bg-zinc-900/60">
+                    <tr className="hover:bg-zinc-900/60" key={thread.id}>
                       <td className="px-3 py-2">
                         <Link
-                          href={`/threads?search=${encodeURIComponent(thread.id)}`}
                           className="block text-xs text-zinc-200 hover:text-zinc-50"
+                          href={`/threads?search=${encodeURIComponent(thread.id)}`}
                         >
                           {thread.displayName}
                         </Link>
-                        <p className="mono mt-1 text-[11px] text-zinc-500">{thread.id}</p>
+                        <p className="mono mt-1 text-[11px] text-zinc-500">
+                          {thread.id}
+                        </p>
                       </td>
                       <td className="px-3 py-2 text-xs text-zinc-300">
                         <p>
@@ -328,11 +422,15 @@ export default function HomePage() {
                         </p>
                         <p className="mt-1 text-zinc-500">
                           {thread.sourceLabel}
-                          {thread.sourceDetail ? ` · ${thread.sourceDetail}` : ""}
+                          {thread.sourceDetail
+                            ? ` · ${thread.sourceDetail}`
+                            : ""}
                         </p>
                       </td>
-                      <td className="px-3 py-2 text-xs text-zinc-400">{thread.projectName ?? "unknown"}</td>
-                      <td className="max-w-[280px] truncate px-3 py-2 mono text-xs text-zinc-500">
+                      <td className="px-3 py-2 text-xs text-zinc-400">
+                        {thread.projectName ?? "unknown"}
+                      </td>
+                      <td className="mono max-w-[280px] truncate px-3 py-2 text-xs text-zinc-500">
                         {toDisplayValue({ value: thread.cwd })}
                       </td>
                       <td className="px-3 py-2 text-xs text-zinc-500">
@@ -354,18 +452,24 @@ export default function HomePage() {
 
       <section className="grid gap-6 xl:grid-cols-2">
         <Panel
-          title="Webhook Health"
-          description="Top subscriptions with scope and delivery status."
           actions={
             <div className="flex items-center gap-2">
-              <Link href="/webhooks" className="text-xs text-zinc-400 hover:text-zinc-200">
+              <Link
+                className="text-xs text-zinc-400 hover:text-zinc-200"
+                href="/webhooks"
+              >
                 open webhooks →
               </Link>
-              <Link href="/webhooks?create=1" className="text-xs text-zinc-400 hover:text-zinc-200">
+              <Link
+                className="text-xs text-zinc-400 hover:text-zinc-200"
+                href="/webhooks?create=1"
+              >
                 create →
               </Link>
             </div>
           }
+          description="Top subscriptions with scope and delivery status."
+          title="Webhook Health"
         >
           {webhookItems.length === 0 ? (
             <EmptyState text="No webhook subscriptions configured." />
@@ -376,11 +480,11 @@ export default function HomePage() {
                   enabled: hook.enabled,
                   lastDeliveryAt: hook.lastDeliveryAt,
                   lastError: hook.lastError,
-                })
+                });
                 return (
                   <article
-                    key={hook.id}
                     className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm"
+                    key={hook.id}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
@@ -388,48 +492,54 @@ export default function HomePage() {
                         <p className="text-xs text-zinc-500">{hook.url}</p>
                       </div>
                       <span
-                        className={`rounded px-2 py-0.5 text-xs font-semibold ${webhookHealthClassName({
-                          health,
-                        })}`}
+                        className={`rounded px-2 py-0.5 font-semibold text-xs ${webhookHealthClassName(
+                          {
+                            health,
+                          }
+                        )}`}
                       >
                         {health}
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-1">
-                      {(hook.scopeKinds && hook.scopeKinds.length > 0 ? hook.scopeKinds : ["global"]).map(
-                        (kind) => (
-                          <span
-                            key={`${hook.id}:${kind}`}
-                            className="rounded bg-indigo-950/60 px-2 py-0.5 text-[11px] text-indigo-200"
-                          >
-                            {kind}
-                          </span>
-                        )
-                      )}
+                      {(hook.scopeKinds && hook.scopeKinds.length > 0
+                        ? hook.scopeKinds
+                        : ["global"]
+                      ).map((kind) => (
+                        <span
+                          className="rounded bg-indigo-950/60 px-2 py-0.5 text-[11px] text-indigo-200"
+                          key={`${hook.id}:${kind}`}
+                        >
+                          {kind}
+                        </span>
+                      ))}
                       {hook.events.slice(0, 4).map((eventType) => (
                         <span
+                          className="mono rounded bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-300"
                           key={`${hook.id}:${eventType}`}
-                          className="rounded bg-zinc-800 px-2 py-0.5 mono text-[11px] text-zinc-300"
                         >
                           {eventType}
                         </span>
                       ))}
                     </div>
                   </article>
-                )
+                );
               })}
             </div>
           )}
         </Panel>
 
         <Panel
-          title="Issues"
-          description="Most recent warning/error signals from lanes, webhooks, and bridge requests."
           actions={
-            <Link href="/system" className="text-xs text-zinc-400 hover:text-zinc-200">
+            <Link
+              className="text-xs text-zinc-400 hover:text-zinc-200"
+              href="/system"
+            >
               open system →
             </Link>
           }
+          description="Most recent warning/error signals from lanes, webhooks, and bridge requests."
+          title="Issues"
         >
           {topIssues.length === 0 ? (
             <EmptyState text="No warnings or errors surfaced in this snapshot." />
@@ -437,19 +547,31 @@ export default function HomePage() {
             <div className="space-y-2">
               {topIssues.map((issue) => (
                 <article
-                  key={issue.id}
                   className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-sm"
+                  key={issue.id}
                 >
                   <div className="mb-1 flex flex-wrap items-center gap-2">
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${issueClassName({ severity: issue.severity })}`}>
+                    <span
+                      className={`rounded px-2 py-0.5 font-medium text-xs ${issueClassName({ severity: issue.severity })}`}
+                    >
                       {issue.severity}
                     </span>
-                    <span className="text-xs text-zinc-400">{issue.source}</span>
+                    <span className="text-xs text-zinc-400">
+                      {issue.source}
+                    </span>
                     <span className="text-xs text-zinc-500">{issue.type}</span>
-                    {issue.source === "webhook" ? <BellRing size={12} className="text-zinc-500" /> : null}
-                    {issue.source === "request" ? <ShieldAlert size={12} className="text-zinc-500" /> : null}
-                    {issue.source === "lane" ? <Activity size={12} className="text-zinc-500" /> : null}
-                    {issue.source === "event" ? <Zap size={12} className="text-zinc-500" /> : null}
+                    {issue.source === "webhook" ? (
+                      <BellRing className="text-zinc-500" size={12} />
+                    ) : null}
+                    {issue.source === "request" ? (
+                      <ShieldAlert className="text-zinc-500" size={12} />
+                    ) : null}
+                    {issue.source === "lane" ? (
+                      <Activity className="text-zinc-500" size={12} />
+                    ) : null}
+                    {issue.source === "event" ? (
+                      <Zap className="text-zinc-500" size={12} />
+                    ) : null}
                   </div>
                   <p className="text-zinc-200">{issue.message}</p>
                   <p className="mt-1 text-xs text-zinc-500">
@@ -463,5 +585,5 @@ export default function HomePage() {
         </Panel>
       </section>
     </div>
-  )
+  );
 }

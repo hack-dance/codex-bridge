@@ -1,8 +1,8 @@
-"use client"
+"use client";
 
-import { Plus, RefreshCw, Search, Trash2 } from "lucide-react"
-import Link from "next/link"
-import { useMemo, useState } from "react"
+import { Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 
 import {
   ActionButton,
@@ -11,131 +11,154 @@ import {
   Panel,
   RowActionMenu,
   RowActionMenuButton,
-} from "@/components/hud-primitives"
+} from "@/components/hud-primitives";
 import {
   formatIso,
+  type WebhookHealth,
   webhookHealth,
   webhookHealthClassName,
-  type WebhookHealth,
-} from "@/lib/dashboard-ui"
-import { runDashboardAction, useDashboardSnapshot } from "@/lib/use-dashboard-snapshot"
+} from "@/lib/dashboard-ui";
+import {
+  runDashboardAction,
+  useDashboardSnapshot,
+} from "@/lib/use-dashboard-snapshot";
 
 interface ScopeSummary {
-  kinds: string[]
-  targets: string[]
+  kinds: string[];
+  targets: string[];
 }
 
 const summarizeScope = ({
   subscription,
 }: {
   subscription: {
-    scopeKinds?: string[]
+    scopeKinds?: string[];
     scope?: {
-      laneIds: string[]
-      threadIds: string[]
-      sessionIds: string[]
-    }
-  }
+      laneIds: string[];
+      threadIds: string[];
+      sessionIds: string[];
+    };
+  };
 }): ScopeSummary => {
   const kinds =
     subscription.scopeKinds && subscription.scopeKinds.length > 0
       ? subscription.scopeKinds
-      : ["global"]
+      : ["global"];
   const targets = [
     ...(subscription.scope?.laneIds ?? []).map((target) => `lane:${target}`),
-    ...(subscription.scope?.threadIds ?? []).map((target) => `thread:${target}`),
-    ...(subscription.scope?.sessionIds ?? []).map((target) => `session:${target}`),
-  ]
+    ...(subscription.scope?.threadIds ?? []).map(
+      (target) => `thread:${target}`
+    ),
+    ...(subscription.scope?.sessionIds ?? []).map(
+      (target) => `session:${target}`
+    ),
+  ];
   return {
     kinds,
     targets: targets.length > 0 ? targets : ["all"],
-  }
-}
+  };
+};
 
-const healthOrder: WebhookHealth[] = ["failing", "stale", "disabled", "idle", "active"]
+const healthOrder: WebhookHealth[] = [
+  "failing",
+  "stale",
+  "disabled",
+  "idle",
+  "active",
+];
 
 const parseTokenList = ({ value }: { value: string }): string[] => {
-  const dedupe = new Set<string>()
+  const dedupe = new Set<string>();
   for (const token of value.split(/[,\s]+/)) {
-    const trimmed = token.trim()
+    const trimmed = token.trim();
     if (trimmed.length > 0) {
-      dedupe.add(trimmed)
+      dedupe.add(trimmed);
     }
   }
-  return [...dedupe]
-}
+  return [...dedupe];
+};
 
-const addToken = ({ input, token }: { input: string; token: string }): string => {
-  const values = parseTokenList({ value: input })
+const addToken = ({
+  input,
+  token,
+}: {
+  input: string;
+  token: string;
+}): string => {
+  const values = parseTokenList({ value: input });
   if (!values.includes(token)) {
-    values.push(token)
+    values.push(token);
   }
-  return values.join(", ")
-}
+  return values.join(", ");
+};
 
 export default function WebhooksPage() {
-  const { snapshot, error, isLoading, isRefreshing, refreshSnapshot } = useDashboardSnapshot()
+  const { snapshot, error, isLoading, isRefreshing, refreshSnapshot } =
+    useDashboardSnapshot();
   const [isCreateOpen, setIsCreateOpen] = useState(() => {
     if (typeof window === "undefined") {
-      return false
+      return false;
     }
-    const params = new URLSearchParams(window.location.search)
+    const params = new URLSearchParams(window.location.search);
     return (
       params.get("create") === "1" ||
       params.has("laneId") ||
       params.has("threadId") ||
       params.has("sessionId")
-    )
-  })
+    );
+  });
   const [search, setSearch] = useState(() => {
     if (typeof window === "undefined") {
-      return ""
+      return "";
     }
-    return new URLSearchParams(window.location.search).get("search") ?? ""
-  })
-  const [createUrl, setCreateUrl] = useState("")
-  const [createEvents, setCreateEvents] = useState("*")
-  const [createEnabled, setCreateEnabled] = useState(true)
-  const [createSecret, setCreateSecret] = useState("")
+    return new URLSearchParams(window.location.search).get("search") ?? "";
+  });
+  const [createUrl, setCreateUrl] = useState("");
+  const [createEvents, setCreateEvents] = useState("*");
+  const [createEnabled, setCreateEnabled] = useState(true);
+  const [createSecret, setCreateSecret] = useState("");
   const [scopeMode, setScopeMode] = useState<"global" | "scoped">(() => {
     if (typeof window === "undefined") {
-      return "global"
+      return "global";
     }
-    const params = new URLSearchParams(window.location.search)
-    return params.has("laneId") || params.has("threadId") || params.has("sessionId")
+    const params = new URLSearchParams(window.location.search);
+    return params.has("laneId") ||
+      params.has("threadId") ||
+      params.has("sessionId")
       ? "scoped"
-      : "global"
-  })
+      : "global";
+  });
   const [scopeLaneIds, setScopeLaneIds] = useState(() => {
     if (typeof window === "undefined") {
-      return ""
+      return "";
     }
-    return new URLSearchParams(window.location.search).get("laneId") ?? ""
-  })
+    return new URLSearchParams(window.location.search).get("laneId") ?? "";
+  });
   const [scopeThreadIds, setScopeThreadIds] = useState(() => {
     if (typeof window === "undefined") {
-      return ""
+      return "";
     }
-    return new URLSearchParams(window.location.search).get("threadId") ?? ""
-  })
+    return new URLSearchParams(window.location.search).get("threadId") ?? "";
+  });
   const [scopeSessionIds, setScopeSessionIds] = useState(() => {
     if (typeof window === "undefined") {
-      return ""
+      return "";
     }
-    return new URLSearchParams(window.location.search).get("sessionId") ?? ""
-  })
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [actionMessage, setActionMessage] = useState<string | null>(null)
-  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null)
-  const [deleteArmedId, setDeleteArmedId] = useState<string | null>(null)
+    return new URLSearchParams(window.location.search).get("sessionId") ?? "";
+  });
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [deleteArmedId, setDeleteArmedId] = useState<string | null>(null);
   const laneById = useMemo(
     () => new Map((snapshot?.lanes ?? []).map((lane) => [lane.laneId, lane])),
     [snapshot?.lanes]
-  )
+  );
   const threadById = useMemo(
-    () => new Map((snapshot?.threads ?? []).map((thread) => [thread.id, thread])),
+    () =>
+      new Map((snapshot?.threads ?? []).map((thread) => [thread.id, thread])),
     [snapshot?.threads]
-  )
+  );
   const laneSuggestions = useMemo(
     () =>
       (snapshot?.lanes ?? [])
@@ -143,7 +166,7 @@ export default function WebhooksPage() {
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         .slice(0, 10),
     [snapshot?.lanes]
-  )
+  );
   const threadSuggestions = useMemo(
     () =>
       (snapshot?.threads ?? [])
@@ -151,24 +174,23 @@ export default function WebhooksPage() {
         .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
         .slice(0, 10),
     [snapshot?.threads]
-  )
+  );
 
   const subscriptions = useMemo(() => {
-    const list = snapshot?.webhooks ?? []
-    const lowered = search.trim().toLowerCase()
-    const filtered = !lowered
-      ? list
-      : list.filter((subscription) => {
-          const scope = summarizeScope({ subscription })
+    const list = snapshot?.webhooks ?? [];
+    const lowered = search.trim().toLowerCase();
+    const filtered = lowered
+      ? list.filter((subscription) => {
+          const scope = summarizeScope({ subscription });
           const scopeLabels = scope.targets.map((target) => {
             if (target.startsWith("lane:")) {
-              return laneById.get(target.slice(5))?.displayName ?? ""
+              return laneById.get(target.slice(5))?.displayName ?? "";
             }
             if (target.startsWith("thread:")) {
-              return threadById.get(target.slice(7))?.displayName ?? ""
+              return threadById.get(target.slice(7))?.displayName ?? "";
             }
-            return ""
-          })
+            return "";
+          });
           const haystack = [
             subscription.id,
             subscription.url,
@@ -178,204 +200,215 @@ export default function WebhooksPage() {
             ...scopeLabels,
           ]
             .join(" ")
-            .toLowerCase()
-          return haystack.includes(lowered)
+            .toLowerCase();
+          return haystack.includes(lowered);
         })
+      : list;
     return [...filtered].sort((left, right) => {
       const leftHealth = webhookHealth({
         enabled: left.enabled,
         lastDeliveryAt: left.lastDeliveryAt,
         lastError: left.lastError,
-      })
+      });
       const rightHealth = webhookHealth({
         enabled: right.enabled,
         lastDeliveryAt: right.lastDeliveryAt,
         lastError: right.lastError,
-      })
-      return healthOrder.indexOf(leftHealth) - healthOrder.indexOf(rightHealth)
-    })
-  }, [laneById, snapshot?.webhooks, search, threadById])
+      });
+      return healthOrder.indexOf(leftHealth) - healthOrder.indexOf(rightHealth);
+    });
+  }, [laneById, snapshot?.webhooks, search, threadById]);
 
   const runAction = async ({
     payload,
     actionKey,
     successMessage,
   }: {
-    payload: Record<string, unknown>
-    actionKey: string
-    successMessage: string
+    payload: Record<string, unknown>;
+    actionKey: string;
+    successMessage: string;
   }): Promise<boolean> => {
-    setPendingActionKey(actionKey)
-    setActionError(null)
-    setActionMessage(null)
+    setPendingActionKey(actionKey);
+    setActionError(null);
+    setActionMessage(null);
     try {
-      await runDashboardAction({ payload })
-      setActionMessage(successMessage)
-      await refreshSnapshot({ isPoll: false })
-      return true
+      await runDashboardAction({ payload });
+      setActionMessage(successMessage);
+      await refreshSnapshot({ isPoll: false });
+      return true;
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : "Action failed"
-      setActionError(message)
-      return false
+      const message =
+        requestError instanceof Error ? requestError.message : "Action failed";
+      setActionError(message);
+      return false;
     } finally {
-      setPendingActionKey(null)
+      setPendingActionKey(null);
     }
-  }
+  };
 
   const createWebhook = async () => {
-    const url = createUrl.trim()
+    const url = createUrl.trim();
     if (!url) {
-      setActionError("Webhook URL is required")
-      setActionMessage(null)
-      return
+      setActionError("Webhook URL is required");
+      setActionMessage(null);
+      return;
     }
     const payload: Record<string, unknown> = {
       action: "webhook-create",
       url,
       enabled: createEnabled,
-    }
-    const events = parseTokenList({ value: createEvents })
+    };
+    const events = parseTokenList({ value: createEvents });
     if (events.length > 0) {
-      payload.events = events
+      payload.events = events;
     }
-    const secret = createSecret.trim()
+    const secret = createSecret.trim();
     if (secret.length > 0) {
-      payload.secret = secret
+      payload.secret = secret;
     }
 
     if (scopeMode === "scoped") {
-      const laneIds = parseTokenList({ value: scopeLaneIds })
-      const threadIds = parseTokenList({ value: scopeThreadIds })
-      const sessionIds = parseTokenList({ value: scopeSessionIds })
+      const laneIds = parseTokenList({ value: scopeLaneIds });
+      const threadIds = parseTokenList({ value: scopeThreadIds });
+      const sessionIds = parseTokenList({ value: scopeSessionIds });
       payload.scope = {
         laneIds,
         threadIds,
         sessionIds,
-      }
+      };
     }
 
     const didCreate = await runAction({
       actionKey: "webhook-create",
       successMessage: "Webhook subscription created",
       payload,
-    })
+    });
     if (!didCreate) {
-      return
+      return;
     }
 
-    setCreateUrl("")
-    setCreateEvents("*")
-    setCreateSecret("")
-    setCreateEnabled(true)
-    setScopeMode("global")
-    setScopeLaneIds("")
-    setScopeThreadIds("")
-    setScopeSessionIds("")
-    setIsCreateOpen(false)
-  }
+    setCreateUrl("");
+    setCreateEvents("*");
+    setCreateSecret("");
+    setCreateEnabled(true);
+    setScopeMode("global");
+    setScopeLaneIds("");
+    setScopeThreadIds("");
+    setScopeSessionIds("");
+    setIsCreateOpen(false);
+  };
 
   return (
     <div className="flex w-full flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Webhooks</h1>
+          <h1 className="font-semibold text-2xl">Webhooks</h1>
           <p className="text-sm text-zinc-400">
-            Hybrid subscriptions with global, lane, thread, and session targeting.
+            Hybrid subscriptions with global, lane, thread, and session
+            targeting.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <ActionButton
-            label={isCreateOpen ? "Hide create" : "Create webhook"}
             icon={<Plus size={14} />}
+            label={isCreateOpen ? "Hide create" : "Create webhook"}
             onClick={() => {
-              setIsCreateOpen((previous) => !previous)
+              setIsCreateOpen((previous) => !previous);
             }}
           />
           <ActionButton
-            label={isRefreshing ? "Refreshing..." : "Refresh"}
-            icon={<RefreshCw size={14} className={isRefreshing ? "animate-spin" : ""} />}
             busy={isRefreshing}
+            icon={
+              <RefreshCw
+                className={isRefreshing ? "animate-spin" : ""}
+                size={14}
+              />
+            }
+            label={isRefreshing ? "Refreshing..." : "Refresh"}
             onClick={() => {
-              refreshSnapshot({ isPoll: false }).catch(() => undefined)
+              refreshSnapshot({ isPoll: false }).catch(() => undefined);
             }}
           />
         </div>
       </header>
 
-      {error ? <Banner tone="error" text={error} /> : null}
-      {actionError ? <Banner tone="error" text={actionError} /> : null}
-      {actionMessage ? <Banner tone="success" text={actionMessage} /> : null}
+      {error ? <Banner text={error} tone="error" /> : null}
+      {actionError ? <Banner text={actionError} tone="error" /> : null}
+      {actionMessage ? <Banner text={actionMessage} tone="success" /> : null}
       {deleteArmedId ? (
-        <p className="text-xs text-amber-300">
-          Delete is armed for webhook <span className="mono">{deleteArmedId}</span>. Click delete again to
+        <p className="text-amber-300 text-xs">
+          Delete is armed for webhook{" "}
+          <span className="mono">{deleteArmedId}</span>. Click delete again to
           confirm.
         </p>
       ) : null}
 
       {isCreateOpen ? (
         <Panel
-          title="Create subscription"
           description="Create global webhooks or scope delivery to lane/thread/session entities."
+          title="Create subscription"
         >
           <div className="grid gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs text-zinc-500">
               destination URL
               <input
-                type="url"
-                value={createUrl}
+                className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
                 onChange={(event) => setCreateUrl(event.target.value)}
                 placeholder="https://example.com/webhooks/codex"
-                className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                type="url"
+                value={createUrl}
               />
             </label>
             <label className="flex flex-col gap-1 text-xs text-zinc-500">
               events (comma-separated)
               <input
-                type="text"
-                value={createEvents}
+                className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
                 onChange={(event) => setCreateEvents(event.target.value)}
                 placeholder="* or lane.status.changed, lane.error"
-                className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                type="text"
+                value={createEvents}
               />
             </label>
             <label className="flex flex-col gap-1 text-xs text-zinc-500">
               secret (optional)
               <input
-                type="text"
-                value={createSecret}
+                className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
                 onChange={(event) => setCreateSecret(event.target.value)}
                 placeholder="shared signing secret"
-                className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                type="text"
+                value={createSecret}
               />
             </label>
             <label className="flex items-center gap-2 text-xs text-zinc-400">
               <input
-                type="checkbox"
                 checked={createEnabled}
                 onChange={(event) => setCreateEnabled(event.target.checked)}
+                type="checkbox"
               />
               enabled on create
             </label>
           </div>
 
           <div className="mt-4 rounded-md border border-zinc-800 bg-zinc-900/70 p-3">
-            <p className="mono text-[11px] uppercase tracking-[0.16em] text-zinc-500">scope</p>
+            <p className="mono text-[11px] text-zinc-500 uppercase tracking-[0.16em]">
+              scope
+            </p>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
               <label className="inline-flex items-center gap-2 text-zinc-300">
                 <input
-                  type="radio"
-                  name="scope-mode"
                   checked={scopeMode === "global"}
+                  name="scope-mode"
                   onChange={() => setScopeMode("global")}
+                  type="radio"
                 />
                 global (all entities)
               </label>
               <label className="inline-flex items-center gap-2 text-zinc-300">
                 <input
-                  type="radio"
-                  name="scope-mode"
                   checked={scopeMode === "scoped"}
+                  name="scope-mode"
                   onChange={() => setScopeMode("scoped")}
+                  type="radio"
                 />
                 scoped (lane/thread/session)
               </label>
@@ -386,26 +419,26 @@ export default function WebhooksPage() {
                 <label className="flex flex-col gap-1 text-xs text-zinc-500">
                   lane IDs
                   <input
-                    type="text"
-                    value={scopeLaneIds}
+                    className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
                     onChange={(event) => setScopeLaneIds(event.target.value)}
                     placeholder="lane_a, lane_b"
-                    className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                    type="text"
+                    value={scopeLaneIds}
                   />
                   <div className="mt-1 flex flex-wrap gap-1">
                     {laneSuggestions.slice(0, 6).map((lane) => (
                       <button
+                        className="rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-700"
                         key={`scope-lane:${lane.laneId}`}
-                        type="button"
                         onClick={() => {
                           setScopeLaneIds((previous) =>
                             addToken({
                               input: previous,
                               token: lane.laneId,
                             })
-                          )
+                          );
                         }}
-                        className="rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-700"
+                        type="button"
                       >
                         {lane.displayName}
                       </button>
@@ -415,26 +448,26 @@ export default function WebhooksPage() {
                 <label className="flex flex-col gap-1 text-xs text-zinc-500">
                   thread IDs
                   <input
-                    type="text"
-                    value={scopeThreadIds}
+                    className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
                     onChange={(event) => setScopeThreadIds(event.target.value)}
                     placeholder="thread_a, thread_b"
-                    className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                    type="text"
+                    value={scopeThreadIds}
                   />
                   <div className="mt-1 flex flex-wrap gap-1">
                     {threadSuggestions.slice(0, 6).map((thread) => (
                       <button
+                        className="rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-700"
                         key={`scope-thread:${thread.id}`}
-                        type="button"
                         onClick={() => {
                           setScopeThreadIds((previous) =>
                             addToken({
                               input: previous,
                               token: thread.id,
                             })
-                          )
+                          );
                         }}
-                        className="rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-700"
+                        type="button"
                       >
                         {thread.displayName}
                       </button>
@@ -444,14 +477,15 @@ export default function WebhooksPage() {
                 <label className="flex flex-col gap-1 text-xs text-zinc-500">
                   session IDs
                   <input
-                    type="text"
-                    value={scopeSessionIds}
+                    className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
                     onChange={(event) => setScopeSessionIds(event.target.value)}
                     placeholder="session_a, session_b"
-                    className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                    type="text"
+                    value={scopeSessionIds}
                   />
                   <p className="text-[11px] text-zinc-500">
-                    Use explicit session identifiers when available from runtime logs or API payloads.
+                    Use explicit session identifiers when available from runtime
+                    logs or API payloads.
                   </p>
                 </label>
               </div>
@@ -460,25 +494,29 @@ export default function WebhooksPage() {
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <ActionButton
-              label={pendingActionKey === "webhook-create" ? "Creating..." : "Create subscription"}
               busy={pendingActionKey === "webhook-create"}
+              label={
+                pendingActionKey === "webhook-create"
+                  ? "Creating..."
+                  : "Create subscription"
+              }
               onClick={() => {
-                createWebhook().catch(() => undefined)
+                createWebhook().catch(() => undefined);
               }}
             />
             <button
-              type="button"
-              onClick={() => {
-                setCreateUrl("")
-                setCreateEvents("*")
-                setCreateSecret("")
-                setCreateEnabled(true)
-                setScopeMode("global")
-                setScopeLaneIds("")
-                setScopeThreadIds("")
-                setScopeSessionIds("")
-              }}
               className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-300 hover:bg-zinc-800"
+              onClick={() => {
+                setCreateUrl("");
+                setCreateEvents("*");
+                setCreateSecret("");
+                setCreateEnabled(true);
+                setScopeMode("global");
+                setScopeLaneIds("");
+                setScopeThreadIds("");
+                setScopeSessionIds("");
+              }}
+              type="button"
             >
               reset
             </button>
@@ -489,13 +527,13 @@ export default function WebhooksPage() {
       <Panel title={`Subscriptions (${subscriptions.length})`}>
         <div className="mb-3">
           <label className="flex h-9 min-w-[360px] items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100">
-            <Search size={14} className="text-zinc-500" />
+            <Search className="text-zinc-500" size={14} />
             <input
-              type="search"
-              value={search}
+              className="w-full bg-transparent outline-none placeholder:text-zinc-500"
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search by id, destination, event, scope target..."
-              className="w-full bg-transparent outline-none placeholder:text-zinc-500"
+              type="search"
+              value={search}
             />
           </label>
         </div>
@@ -507,7 +545,7 @@ export default function WebhooksPage() {
         ) : (
           <div className="max-h-[72vh] overflow-auto rounded-lg border border-zinc-800">
             <table className="min-w-full divide-y divide-zinc-800 text-sm">
-              <thead className="sticky top-0 bg-zinc-900/95 text-left text-xs uppercase tracking-wide text-zinc-500">
+              <thead className="sticky top-0 bg-zinc-900/95 text-left text-xs text-zinc-500 uppercase tracking-wide">
                 <tr>
                   <th className="px-3 py-2">Webhook</th>
                   <th className="px-3 py-2">Scope</th>
@@ -523,20 +561,27 @@ export default function WebhooksPage() {
                     enabled: subscription.enabled,
                     lastDeliveryAt: subscription.lastDeliveryAt,
                     lastError: subscription.lastError,
-                  })
-                  const scope = summarizeScope({ subscription })
+                  });
+                  const scope = summarizeScope({ subscription });
                   return (
-                    <tr key={subscription.id} className="align-top hover:bg-zinc-900/60">
+                    <tr
+                      className="align-top hover:bg-zinc-900/60"
+                      key={subscription.id}
+                    >
                       <td className="px-3 py-2">
-                        <p className="font-mono text-xs text-zinc-200">{subscription.id}</p>
-                        <p className="max-w-[300px] break-all text-xs text-zinc-400">{subscription.url}</p>
+                        <p className="font-mono text-xs text-zinc-200">
+                          {subscription.id}
+                        </p>
+                        <p className="max-w-[300px] break-all text-xs text-zinc-400">
+                          {subscription.url}
+                        </p>
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
                           {scope.kinds.map((kind) => (
                             <span
-                              key={`${subscription.id}:${kind}`}
                               className="rounded bg-indigo-950/60 px-2 py-0.5 text-[11px] text-indigo-200"
+                              key={`${subscription.id}:${kind}`}
                             >
                               {kind}
                             </span>
@@ -545,7 +590,7 @@ export default function WebhooksPage() {
                         <div className="mt-1 flex flex-wrap gap-1">
                           {scope.targets.slice(0, 4).map((target) => (
                             <Link
-                              key={`${subscription.id}:target:${target}`}
+                              className="rounded bg-zinc-800 px-2 py-0.5 font-mono text-[11px] text-zinc-300"
                               href={
                                 target.startsWith("lane:")
                                   ? `/lanes?search=${encodeURIComponent(target.slice(5))}`
@@ -553,7 +598,7 @@ export default function WebhooksPage() {
                                     ? `/threads?search=${encodeURIComponent(target.slice(7))}`
                                     : `/topology?search=${encodeURIComponent(target)}`
                               }
-                              className="rounded bg-zinc-800 px-2 py-0.5 font-mono text-[11px] text-zinc-300"
+                              key={`${subscription.id}:target:${target}`}
                             >
                               {target.startsWith("lane:")
                                 ? `${target} (${laneById.get(target.slice(5))?.displayName ?? "unknown"})`
@@ -573,8 +618,8 @@ export default function WebhooksPage() {
                         <div className="flex flex-wrap gap-1">
                           {subscription.events.map((eventType) => (
                             <span
-                              key={`${subscription.id}:${eventType}`}
                               className="rounded bg-zinc-800 px-2 py-0.5 font-mono text-[11px] text-zinc-300"
+                              key={`${subscription.id}:${eventType}`}
                             >
                               {eventType}
                             </span>
@@ -583,36 +628,54 @@ export default function WebhooksPage() {
                       </td>
                       <td className="px-3 py-2">
                         <span
-                          className={`inline-flex rounded px-2 py-0.5 text-xs font-semibold ${webhookHealthClassName({ health })}`}
+                          className={`inline-flex rounded px-2 py-0.5 font-semibold text-xs ${webhookHealthClassName({ health })}`}
                         >
                           {health}
                         </span>
                         <p className="mt-1 text-xs text-zinc-500">
-                          delivered {formatIso({ value: subscription.lastDeliveryAt })}
+                          delivered{" "}
+                          {formatIso({ value: subscription.lastDeliveryAt })}
                         </p>
                         {subscription.lastError ? (
-                          <p className="mt-1 max-w-[240px] text-xs text-rose-300">{subscription.lastError}</p>
+                          <p className="mt-1 max-w-[240px] text-rose-300 text-xs">
+                            {subscription.lastError}
+                          </p>
                         ) : null}
                       </td>
                       <td className="px-3 py-2 text-xs text-zinc-400">
                         {formatIso({ value: subscription.updatedAt })}
                       </td>
                       <td className="px-3 py-2">
-                        <RowActionMenu label={`Actions for webhook ${subscription.id}`}>
+                        <RowActionMenu
+                          label={`Actions for webhook ${subscription.id}`}
+                        >
                           <RowActionMenuButton
+                            busy={
+                              pendingActionKey ===
+                              `webhook-test:${subscription.id}`
+                            }
                             label="Test webhook"
-                            busy={pendingActionKey === `webhook-test:${subscription.id}`}
                             onClick={() => {
                               runAction({
                                 actionKey: `webhook-test:${subscription.id}`,
                                 successMessage: `Webhook ${subscription.id} test triggered`,
-                                payload: { action: "webhook-test", id: subscription.id },
-                              }).catch(() => undefined)
+                                payload: {
+                                  action: "webhook-test",
+                                  id: subscription.id,
+                                },
+                              }).catch(() => undefined);
                             }}
                           />
                           <RowActionMenuButton
-                            label={subscription.enabled ? "Disable webhook" : "Enable webhook"}
-                            busy={pendingActionKey === `webhook-toggle:${subscription.id}`}
+                            busy={
+                              pendingActionKey ===
+                              `webhook-toggle:${subscription.id}`
+                            }
+                            label={
+                              subscription.enabled
+                                ? "Disable webhook"
+                                : "Enable webhook"
+                            }
                             onClick={() => {
                               runAction({
                                 actionKey: `webhook-toggle:${subscription.id}`,
@@ -622,31 +685,41 @@ export default function WebhooksPage() {
                                   id: subscription.id,
                                   enabled: !subscription.enabled,
                                 },
-                              }).catch(() => undefined)
+                              }).catch(() => undefined);
                             }}
                           />
                           <RowActionMenuButton
-                            label={deleteArmedId === subscription.id ? "Confirm delete webhook" : "Delete webhook"}
-                            variant="danger"
+                            busy={
+                              pendingActionKey ===
+                              `webhook-delete:${subscription.id}`
+                            }
                             icon={<Trash2 size={12} />}
-                            busy={pendingActionKey === `webhook-delete:${subscription.id}`}
+                            label={
+                              deleteArmedId === subscription.id
+                                ? "Confirm delete webhook"
+                                : "Delete webhook"
+                            }
                             onClick={() => {
                               if (deleteArmedId !== subscription.id) {
-                                setDeleteArmedId(subscription.id)
-                                return
+                                setDeleteArmedId(subscription.id);
+                                return;
                               }
-                              setDeleteArmedId(null)
+                              setDeleteArmedId(null);
                               runAction({
                                 actionKey: `webhook-delete:${subscription.id}`,
                                 successMessage: `Webhook ${subscription.id} deleted`,
-                                payload: { action: "webhook-delete", id: subscription.id },
-                              }).catch(() => undefined)
+                                payload: {
+                                  action: "webhook-delete",
+                                  id: subscription.id,
+                                },
+                              }).catch(() => undefined);
                             }}
+                            variant="danger"
                           />
                         </RowActionMenu>
                       </td>
                     </tr>
-                  )
+                  );
                 })}
               </tbody>
             </table>
@@ -654,5 +727,5 @@ export default function WebhooksPage() {
         )}
       </Panel>
     </div>
-  )
+  );
 }

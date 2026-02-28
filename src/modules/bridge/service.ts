@@ -469,13 +469,13 @@ function webhookMatchesScope({
   }
   if (
     scope.threadIds.length > 0 &&
-    (!threadId || !scope.threadIds.includes(threadId))
+    !(threadId && scope.threadIds.includes(threadId))
   ) {
     return false;
   }
   if (
     scope.sessionIds.length > 0 &&
-    (!sessionId || !scope.sessionIds.includes(sessionId))
+    !(sessionId && scope.sessionIds.includes(sessionId))
   ) {
     return false;
   }
@@ -1451,7 +1451,7 @@ async function codexRpc(method: string, params: Record<string, unknown> = {}) {
 
   const summarizeStderr = () => {
     const combined = stderrLines.join("");
-    return combined.length > 0 ? combined.slice(0, 8_000) : undefined;
+    return combined.length > 0 ? combined.slice(0, 8000) : undefined;
   };
   const pending = new Map<
     number,
@@ -1544,9 +1544,7 @@ async function codexRpc(method: string, params: Record<string, unknown> = {}) {
     }
     return res?.result ?? {};
   } catch (error) {
-    const err = error instanceof Error
-      ? error
-      : new Error(String(error));
+    const err = error instanceof Error ? error : new Error(String(error));
     const stderr = summarizeStderr();
     if (stderr) {
       err.message = `${err.message}; codex_stderr=${stderr}`;

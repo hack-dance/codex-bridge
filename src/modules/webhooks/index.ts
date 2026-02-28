@@ -83,7 +83,10 @@ const normalizeWebhookScope = ({
   }
   const normalized = {
     laneIds: normalizeIds({ values: scope.laneIds, single: scope.laneId }),
-    threadIds: normalizeIds({ values: scope.threadIds, single: scope.threadId }),
+    threadIds: normalizeIds({
+      values: scope.threadIds,
+      single: scope.threadId,
+    }),
     sessionIds: normalizeIds({
       values: scope.sessionIds,
       single: scope.sessionId,

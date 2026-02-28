@@ -6,8 +6,8 @@ import {
   type Edge,
   MiniMap,
   type Node,
-  type ReactFlowInstance,
   ReactFlow,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import { Activity, Layers, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -60,7 +60,12 @@ const TERMINAL_LANE_STATUSES = new Set([
   "failed",
   "interrupted",
 ]);
-const PROBLEM_LANE_STATUSES = new Set(["needs_approval", "blocked", "failed", "interrupted"]);
+const PROBLEM_LANE_STATUSES = new Set([
+  "needs_approval",
+  "blocked",
+  "failed",
+  "interrupted",
+]);
 
 type TopologyMode = "ops" | "debug" | "audit";
 
@@ -244,10 +249,9 @@ const threadNodeStyle = ({
     return {
       ...baseNodeStyle,
       border: isSubAgent ? "1px solid #a78bfa" : "1px solid #22d3ee",
-      boxShadow:
-        isSubAgent
-          ? "0 10px 28px rgba(167, 139, 250, 0.15), 0 0 0 1px rgba(167, 139, 250, 0.22)"
-          : "0 10px 28px rgba(34, 211, 238, 0.15), 0 0 0 1px rgba(34, 211, 238, 0.22)",
+      boxShadow: isSubAgent
+        ? "0 10px 28px rgba(167, 139, 250, 0.15), 0 0 0 1px rgba(167, 139, 250, 0.22)"
+        : "0 10px 28px rgba(34, 211, 238, 0.15), 0 0 0 1px rgba(34, 211, 238, 0.22)",
       width: THREAD_NODE_WIDTH,
       background: isSubAgent ? "#1b1230" : hasChildren ? "#10212a" : "#101824",
       color: isSubAgent ? "#f5f3ff" : "#ecfeff",
@@ -462,8 +466,9 @@ export default function TopologyPage() {
     return new URLSearchParams(window.location.search).get("search") ?? "";
   });
   const [selectedNode, setSelectedNode] = useState<TopologyMeta | null>(null);
-  const [topologyMode, setTopologyMode] =
-    useState<TopologyMode>(DEFAULT_TOPOLOGY_MODE);
+  const [topologyMode, setTopologyMode] = useState<TopologyMode>(
+    DEFAULT_TOPOLOGY_MODE
+  );
   const [viewMode, setViewMode] = useState<"focused" | "all">("focused");
   const [layoutPreset, setLayoutPreset] = useState<"compact" | "roomy">(
     "roomy"
@@ -482,9 +487,10 @@ export default function TopologyPage() {
   const [deleteLanesArmed, setDeleteLanesArmed] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [projectFilterQuery, setProjectFilterQuery] = useState("");
-  const [reactFlowInstance, setReactFlowInstance] = useState<
-    ReactFlowInstance<Node<{ label: ReactNode; meta?: TopologyMeta }>, Edge> | null
-  >(null);
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<
+    Node<{ label: ReactNode; meta?: TopologyMeta }>,
+    Edge
+  > | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -515,27 +521,30 @@ export default function TopologyPage() {
     }
   };
 
-  const applyTopologyModePreset = useCallback(({ mode }: { mode: TopologyMode }) => {
-    setTopologyMode(mode);
-    setArchiveThreadsArmed(false);
-    setDeleteLanesArmed(false);
-    if (mode === "ops") {
-      setViewMode("focused");
-      setHideStaleThreads(true);
-      setStaleThreadHours(DEFAULT_STALE_THREAD_HOURS);
-      setLayoutPreset("roomy");
-      return;
-    }
-    if (mode === "debug") {
+  const applyTopologyModePreset = useCallback(
+    ({ mode }: { mode: TopologyMode }) => {
+      setTopologyMode(mode);
+      setArchiveThreadsArmed(false);
+      setDeleteLanesArmed(false);
+      if (mode === "ops") {
+        setViewMode("focused");
+        setHideStaleThreads(true);
+        setStaleThreadHours(DEFAULT_STALE_THREAD_HOURS);
+        setLayoutPreset("roomy");
+        return;
+      }
+      if (mode === "debug") {
+        setViewMode("all");
+        setHideStaleThreads(false);
+        setLayoutPreset("roomy");
+        return;
+      }
       setViewMode("all");
       setHideStaleThreads(false);
-      setLayoutPreset("roomy");
-      return;
-    }
-    setViewMode("all");
-    setHideStaleThreads(false);
-    setLayoutPreset("compact");
-  }, []);
+      setLayoutPreset("compact");
+    },
+    []
+  );
 
   const laneByThread = useMemo(() => {
     const map = new Map<string, DashboardLane[]>();
@@ -635,7 +644,10 @@ export default function TopologyPage() {
               addedInPass = false;
               for (const thread of allThreads) {
                 const parentId = thread.sourceParentThreadId;
-                if (!parentId || !included.has(parentId) || included.has(thread.id)) {
+                if (
+                  !(parentId && included.has(parentId)) ||
+                  included.has(thread.id)
+                ) {
                   continue;
                 }
                 if (isSubAgentThread({ thread })) {
@@ -884,13 +896,17 @@ export default function TopologyPage() {
             { label: "Title", value: row.thread.title ?? "Untitled" },
             { label: "Originator", value: threadOrigin },
             { label: "Source", value: row.thread.sourceLabel },
-            { label: "Source detail", value: row.thread.sourceDetail ?? "none" },
+            {
+              label: "Source detail",
+              value: row.thread.sourceDetail ?? "none",
+            },
             { label: "Depth", value: String(row.depth + 1) },
             { label: "Attached lanes", value: String(threadLanes.length) },
           ],
         };
 
-        const threadDepthIndent = Math.min(4, Math.max(0, row.depth)) * layoutThreadDepthXStep;
+        const threadDepthIndent =
+          Math.min(4, Math.max(0, row.depth)) * layoutThreadDepthXStep;
         const threadX = PROJECT_PADDING_X + threadDepthIndent;
         const threadY = cursorY;
         const threadNodeId = `thread:${row.thread.id}`;
@@ -1060,7 +1076,10 @@ export default function TopologyPage() {
                 { label: "Session key", value: session.laneId },
                 { label: "Lane", value: lane.displayName },
                 { label: "Thread", value: session.threadId ?? "none" },
-                { label: "Ownership", value: "session belongs to lane runtime" },
+                {
+                  label: "Ownership",
+                  value: "session belongs to lane runtime",
+                },
                 { label: "Started", value: session.startedAt ?? "unknown" },
                 {
                   label: "Pending requests",
@@ -1145,10 +1164,7 @@ export default function TopologyPage() {
               : threadY + layoutLaneBaseYOffset + layoutLaneYStep
           );
           maxChildX = Math.max(maxChildX, laneX + LANE_NODE_WIDTH + 40);
-          maxChildX = Math.max(
-            maxChildX,
-            sessionX + SESSION_NODE_WIDTH + 48
-          );
+          maxChildX = Math.max(maxChildX, sessionX + SESSION_NODE_WIDTH + 48);
         }
 
         const hiddenSubAgentCount =
@@ -1286,7 +1302,9 @@ export default function TopologyPage() {
     snapshot?.topologyDiagnostics.unresolvedParentIds.length ?? 0;
   const selectedNodes = useMemo(
     () =>
-      flowGraph.nodes.filter((node) => selectedNodeIds.includes(String(node.id))),
+      flowGraph.nodes.filter((node) =>
+        selectedNodeIds.includes(String(node.id))
+      ),
     [flowGraph.nodes, selectedNodeIds]
   );
   const selectedThreadIds = useMemo(
@@ -1336,7 +1354,9 @@ export default function TopologyPage() {
         parentId = parent.parentId;
       }
       const width =
-        typeof node.style?.width === "number" ? node.style.width : THREAD_NODE_WIDTH;
+        typeof node.style?.width === "number"
+          ? node.style.width
+          : THREAD_NODE_WIDTH;
       const height =
         typeof node.style?.height === "number"
           ? node.style.height
@@ -1355,10 +1375,14 @@ export default function TopologyPage() {
       if (!box) {
         return;
       }
-      reactFlowInstance.setCenter(box.x + box.width / 2, box.y + box.height / 2, {
-        zoom: 0.98,
-        duration: 320,
-      });
+      reactFlowInstance.setCenter(
+        box.x + box.width / 2,
+        box.y + box.height / 2,
+        {
+          zoom: 0.98,
+          duration: 320,
+        }
+      );
     },
     [reactFlowInstance, resolveNodeGlobalBox]
   );
@@ -1708,7 +1732,8 @@ export default function TopologyPage() {
             unresolved parent refs (snapshot): {unresolvedParentCount}
           </span>
           <span className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1">
-            unresolved parent links (rendered): {flowGraph.missingParentEdgeCount}
+            unresolved parent links (rendered):{" "}
+            {flowGraph.missingParentEdgeCount}
           </span>
           {cleanupArmed ? (
             <span className="rounded border border-amber-600/50 bg-amber-950/30 px-2 py-1 text-amber-200">
@@ -1795,7 +1820,9 @@ export default function TopologyPage() {
             }}
             type="button"
           >
-            {archiveThreadsArmed ? "confirm archive threads" : "archive threads"}
+            {archiveThreadsArmed
+              ? "confirm archive threads"
+              : "archive threads"}
           </button>
           <button
             className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-zinc-200 hover:bg-zinc-800 disabled:opacity-45"
@@ -1821,7 +1848,7 @@ export default function TopologyPage() {
         </div>
 
         {isCommandPaletteOpen ? (
-          <div className="mb-3 rounded-lg border border-cyan-700/40 bg-cyan-950/20 p-3 text-xs text-cyan-100">
+          <div className="mb-3 rounded-lg border border-cyan-700/40 bg-cyan-950/20 p-3 text-cyan-100 text-xs">
             <div className="mb-2 font-medium">Topology command palette</div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -1897,7 +1924,8 @@ export default function TopologyPage() {
             ownership: lane belongs to thread; running session belongs to lane
           </span>
           <span className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1">
-            edge semantics: dashed = degraded/missing ancestry, animated = live work
+            edge semantics: dashed = degraded/missing ancestry, animated = live
+            work
           </span>
         </div>
 
@@ -1945,7 +1973,9 @@ export default function TopologyPage() {
                 setSelectedNodeIds((current) => {
                   if (
                     current.length === nextNodeIds.length &&
-                    current.every((nodeId, index) => nodeId === nextNodeIds[index])
+                    current.every(
+                      (nodeId, index) => nodeId === nextNodeIds[index]
+                    )
                   ) {
                     return current;
                   }
@@ -1960,7 +1990,10 @@ export default function TopologyPage() {
                 maskColor="rgba(10,10,12,0.6)"
                 nodeColor={(node) =>
                   miniMapNodeColor({
-                    node: node as Node<{ label: ReactNode; meta?: TopologyMeta }>,
+                    node: node as Node<{
+                      label: ReactNode;
+                      meta?: TopologyMeta;
+                    }>,
                   })
                 }
                 pannable

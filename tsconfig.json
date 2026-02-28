@@ -23,7 +23,5 @@
     "noImplicitAny": true,
     "types": ["bun", "node"]
   },
-  "exclude": [
-    "dashboard"
-  ]
+  "exclude": ["dashboard"]
 }

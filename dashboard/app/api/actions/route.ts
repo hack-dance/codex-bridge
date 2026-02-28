@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server"
+import { NextResponse } from "next/server";
 
-import { resolveBridgeBaseUrl } from "@/lib/dashboard-data"
+import { resolveBridgeBaseUrl } from "@/lib/dashboard-data";
 
 type ActionName =
   | "reconcile-stale"
@@ -16,56 +16,67 @@ type ActionName =
   | "webhook-test"
   | "webhook-create"
   | "webhook-toggle"
-  | "webhook-delete"
+  | "webhook-delete";
 
 interface BridgeRequestResult {
-  status: number
-  payload: unknown
+  status: number;
+  payload: unknown;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const toStringValue = ({ value }: { value: unknown }): string | null => {
   if (typeof value !== "string") {
-    return null
+    return null;
   }
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : null
-}
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
 
-const toBooleanValue = ({ value, fallback }: { value: unknown; fallback: boolean }): boolean =>
-  typeof value === "boolean" ? value : fallback
+const toBooleanValue = ({
+  value,
+  fallback,
+}: {
+  value: unknown;
+  fallback: boolean;
+}): boolean => (typeof value === "boolean" ? value : fallback);
 
-const toNumberValue = ({ value, fallback }: { value: unknown; fallback: number }): number =>
-  typeof value === "number" && Number.isFinite(value) ? value : fallback
+const toNumberValue = ({
+  value,
+  fallback,
+}: {
+  value: unknown;
+  fallback: number;
+}): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : fallback;
 
 const toStringArray = ({ value }: { value: unknown }): string[] | undefined => {
   if (!Array.isArray(value)) {
-    return undefined
+    return undefined;
   }
   const items = value
     .map((item) => toStringValue({ value: item }))
-    .filter((item): item is string => item !== null)
-  return items.length > 0 ? items : undefined
-}
+    .filter((item): item is string => item !== null);
+  return items.length > 0 ? items : undefined;
+};
 
 const toWebhookScope = ({
   value,
 }: {
-  value: unknown
+  value: unknown;
 }):
   | {
-      laneId?: string
-      laneIds?: string[]
-      threadId?: string
-      threadIds?: string[]
-      sessionId?: string
-      sessionIds?: string[]
+      laneId?: string;
+      laneIds?: string[];
+      threadId?: string;
+      threadIds?: string[];
+      sessionId?: string;
+      sessionIds?: string[];
     }
   | undefined => {
   if (!isRecord(value)) {
-    return undefined
+    return undefined;
   }
   const scope = {
     laneId: toStringValue({ value: value.laneId }) ?? undefined,
@@ -74,30 +85,30 @@ const toWebhookScope = ({
     threadIds: toStringArray({ value: value.threadIds }),
     sessionId: toStringValue({ value: value.sessionId }) ?? undefined,
     sessionIds: toStringArray({ value: value.sessionIds }),
-  }
+  };
   const hasAnyScope =
     Boolean(scope.laneId) ||
     Boolean(scope.threadId) ||
     Boolean(scope.sessionId) ||
     Boolean(scope.laneIds?.length) ||
     Boolean(scope.threadIds?.length) ||
-    Boolean(scope.sessionIds?.length)
-  return hasAnyScope ? scope : undefined
-}
+    Boolean(scope.sessionIds?.length);
+  return hasAnyScope ? scope : undefined;
+};
 
 const badRequest = ({ message }: { message: string }) =>
-  NextResponse.json({ error: "invalid_request", message }, { status: 400 })
+  NextResponse.json({ error: "invalid_request", message }, { status: 400 });
 
 const bridgeRequest = async ({
   endpoint,
   method,
   body,
 }: {
-  endpoint: string
-  method: "POST" | "PATCH" | "DELETE"
-  body?: Record<string, unknown>
+  endpoint: string;
+  method: "POST" | "PATCH" | "DELETE";
+  body?: Record<string, unknown>;
 }): Promise<BridgeRequestResult> => {
-  const baseUrl = resolveBridgeBaseUrl()
+  const baseUrl = resolveBridgeBaseUrl();
 
   try {
     const response = await fetch(`${baseUrl}${endpoint}`, {
@@ -108,21 +119,21 @@ const bridgeRequest = async ({
       },
       body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
-    })
+    });
 
-    const text = await response.text()
+    const text = await response.text();
     if (!text.trim()) {
       return {
         status: response.status,
         payload: { ok: response.ok },
-      }
+      };
     }
 
     try {
       return {
         status: response.status,
         payload: JSON.parse(text) as unknown,
-      }
+      };
     } catch {
       return {
         status: response.status,
@@ -130,37 +141,40 @@ const bridgeRequest = async ({
           ok: response.ok,
           body: text,
         },
-      }
+      };
     }
   } catch (error) {
     return {
       status: 502,
       payload: {
         error: "bridge_request_failed",
-        message: error instanceof Error ? error.message : "Unknown bridge request failure",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unknown bridge request failure",
       },
-    }
+    };
   }
-}
+};
 
 export async function POST(request: Request) {
-  let payload: unknown
+  let payload: unknown;
   try {
-    payload = (await request.json()) as unknown
+    payload = (await request.json()) as unknown;
   } catch {
-    return badRequest({ message: "Request body must be valid JSON" })
+    return badRequest({ message: "Request body must be valid JSON" });
   }
 
   if (!isRecord(payload)) {
-    return badRequest({ message: "Request body must be an object" })
+    return badRequest({ message: "Request body must be an object" });
   }
 
-  const actionValue = toStringValue({ value: payload.action })
+  const actionValue = toStringValue({ value: payload.action });
   if (!actionValue) {
-    return badRequest({ message: "Missing action" })
+    return badRequest({ message: "Missing action" });
   }
 
-  const action = actionValue as ActionName
+  const action = actionValue as ActionName;
 
   if (action === "reconcile-stale") {
     const result = await bridgeRequest({
@@ -176,8 +190,8 @@ export async function POST(request: Request) {
           fallback: true,
         }),
       },
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "watch-start") {
@@ -185,71 +199,74 @@ export async function POST(request: Request) {
       endpoint: "/watch/start",
       method: "POST",
       body: {
-        intervalSec: toNumberValue({ value: payload.intervalSec, fallback: 15 }),
+        intervalSec: toNumberValue({
+          value: payload.intervalSec,
+          fallback: 15,
+        }),
       },
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "watch-stop") {
     const result = await bridgeRequest({
       endpoint: "/watch/stop",
       method: "POST",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "watch-tick") {
     const result = await bridgeRequest({
       endpoint: "/watch/tick",
       method: "POST",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
-  const laneId = toStringValue({ value: payload.laneId })
+  const laneId = toStringValue({ value: payload.laneId });
   if (action === "lane-sync") {
     if (!laneId) {
-      return badRequest({ message: "lane-sync requires laneId" })
+      return badRequest({ message: "lane-sync requires laneId" });
     }
     const result = await bridgeRequest({
       endpoint: `/lanes/${laneId}/sync-from-codex`,
       method: "POST",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "lane-start-session") {
     if (!laneId) {
-      return badRequest({ message: "lane-start-session requires laneId" })
+      return badRequest({ message: "lane-start-session requires laneId" });
     }
     const result = await bridgeRequest({
       endpoint: `/lanes/${laneId}/session/start`,
       method: "POST",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "lane-stop-session") {
     if (!laneId) {
-      return badRequest({ message: "lane-stop-session requires laneId" })
+      return badRequest({ message: "lane-stop-session requires laneId" });
     }
     const result = await bridgeRequest({
       endpoint: `/lanes/${laneId}/session/stop`,
       method: "POST",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "lane-delete") {
     if (!laneId) {
-      return badRequest({ message: "lane-delete requires laneId" })
+      return badRequest({ message: "lane-delete requires laneId" });
     }
     const result = await bridgeRequest({
       endpoint: `/lanes/${laneId}`,
       method: "DELETE",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "lane-cleanup") {
@@ -257,7 +274,7 @@ export async function POST(request: Request) {
       ? payload.statuses
           .map((value) => toStringValue({ value }))
           .filter((value): value is string => value !== null)
-      : undefined
+      : undefined;
     const result = await bridgeRequest({
       endpoint: "/lanes/cleanup",
       method: "POST",
@@ -274,83 +291,85 @@ export async function POST(request: Request) {
         limit: toNumberValue({ value: payload.limit, fallback: 100 }),
         dryRun: toBooleanValue({ value: payload.dryRun, fallback: false }),
       },
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
-  const threadId = toStringValue({ value: payload.threadId })
+  const threadId = toStringValue({ value: payload.threadId });
   if (action === "thread-archive") {
     if (!threadId) {
-      return badRequest({ message: "thread-archive requires threadId" })
+      return badRequest({ message: "thread-archive requires threadId" });
     }
     const result = await bridgeRequest({
       endpoint: `/codex/threads/${threadId}/archive`,
       method: "POST",
       body: {},
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
-  const webhookId = toStringValue({ value: payload.id })
+  const webhookId = toStringValue({ value: payload.id });
   if (action === "webhook-create") {
-    const url = toStringValue({ value: payload.url })
+    const url = toStringValue({ value: payload.url });
     if (!url) {
-      return badRequest({ message: "webhook-create requires url" })
+      return badRequest({ message: "webhook-create requires url" });
     }
-    const events = toStringArray({ value: payload.events })
-    const secret = toStringValue({ value: payload.secret })
-    const scope = toWebhookScope({ value: payload.scope })
+    const events = toStringArray({ value: payload.events });
+    const secret = toStringValue({ value: payload.secret });
+    const scope = toWebhookScope({ value: payload.scope });
     const body: Record<string, unknown> = {
       url,
       ...(events ? { events } : {}),
-      ...(typeof payload.enabled === "boolean" ? { enabled: payload.enabled } : {}),
+      ...(typeof payload.enabled === "boolean"
+        ? { enabled: payload.enabled }
+        : {}),
       ...(secret ? { secret } : {}),
       ...(scope ? { scope } : {}),
-    }
+    };
     const result = await bridgeRequest({
       endpoint: "/webhooks",
       method: "POST",
       body,
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "webhook-test") {
     if (!webhookId) {
-      return badRequest({ message: "webhook-test requires id" })
+      return badRequest({ message: "webhook-test requires id" });
     }
     const result = await bridgeRequest({
       endpoint: `/webhooks/${webhookId}/test`,
       method: "POST",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "webhook-toggle") {
     if (!webhookId) {
-      return badRequest({ message: "webhook-toggle requires id" })
+      return badRequest({ message: "webhook-toggle requires id" });
     }
     if (typeof payload.enabled !== "boolean") {
-      return badRequest({ message: "webhook-toggle requires boolean enabled" })
+      return badRequest({ message: "webhook-toggle requires boolean enabled" });
     }
     const result = await bridgeRequest({
       endpoint: `/webhooks/${webhookId}`,
       method: "PATCH",
       body: { enabled: payload.enabled },
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
   if (action === "webhook-delete") {
     if (!webhookId) {
-      return badRequest({ message: "webhook-delete requires id" })
+      return badRequest({ message: "webhook-delete requires id" });
     }
     const result = await bridgeRequest({
       endpoint: `/webhooks/${webhookId}`,
       method: "DELETE",
-    })
-    return NextResponse.json(result.payload, { status: result.status })
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
-  return badRequest({ message: `Unsupported action: ${actionValue}` })
+  return badRequest({ message: `Unsupported action: ${actionValue}` });
 }

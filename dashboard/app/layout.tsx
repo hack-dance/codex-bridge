@@ -17,13 +17,14 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Codex Bridge Dashboard",
-  description: "Operational dashboard for lanes, threads, webhooks, and runtime issues",
-}
+  description:
+    "Operational dashboard for lanes, threads, webhooks, and runtime issues",
+};
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode
+  children: React.ReactNode;
 }>) {
   return (
     <html lang="en">
@@ -32,15 +33,17 @@ export default function RootLayout({
       >
         <div className="min-h-screen bg-background text-foreground">
           <div className="pointer-events-none fixed inset-0 opacity-60">
-            <div className="absolute -left-32 -top-24 h-96 w-96 rounded-full bg-zinc-900 blur-3xl" />
-            <div className="absolute bottom-0 right-0 h-112 w-md rounded-full bg-zinc-900 blur-3xl" />
+            <div className="absolute -top-24 -left-32 h-96 w-96 rounded-full bg-zinc-900 blur-3xl" />
+            <div className="absolute right-0 bottom-0 h-112 w-md rounded-full bg-zinc-900 blur-3xl" />
           </div>
           <div className="relative flex w-full">
             <SidebarNav />
-            <div className="min-h-screen flex-1 px-2 py-4 md:px-3 md:py-5">{children}</div>
+            <div className="min-h-screen flex-1 px-2 py-4 md:px-3 md:py-5">
+              {children}
+            </div>
           </div>
         </div>
       </body>
     </html>
-  )
+  );
 }

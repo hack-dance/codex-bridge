@@ -21,7 +21,6 @@ import {
   EmptyState,
   Panel,
   RowActionMenu,
-  RowActionMenuButton,
   RowActionMenuLink,
   StatCard,
 } from "@/components/hud-primitives"
@@ -91,6 +90,58 @@ export default function HomePage() {
   const threadById = useMemo(
     () => new Map((snapshot?.threads ?? []).map((thread) => [thread.id, thread])),
     [snapshot?.threads]
+  )
+  const laneById = useMemo(
+    () => new Map((snapshot?.lanes ?? []).map((lane) => [lane.laneId, lane])),
+    [snapshot?.lanes]
+  )
+  const liveThreadsNow = useMemo(() => {
+    const threadIds = new Set<string>((snapshot?.activeThreads ?? []).map((thread) => thread.id))
+    for (const laneSession of snapshot?.laneSessions ?? []) {
+      if (
+        laneSession.running ||
+        laneSession.pendingRequests > 0 ||
+        laneSession.readinessDeferred
+      ) {
+        if (laneSession.threadId) {
+          threadIds.add(laneSession.threadId)
+          continue
+        }
+        const linkedLane = laneById.get(laneSession.laneId)
+        if (linkedLane?.threadId) {
+          threadIds.add(linkedLane.threadId)
+        }
+      }
+    }
+    const nowMs = Date.now()
+    for (const laneEvent of snapshot?.laneEvents ?? []) {
+      if (!laneEvent.type.startsWith("lane.turn.")) {
+        continue
+      }
+      const eventMs = Date.parse(laneEvent.ts)
+      if (Number.isNaN(eventMs) || nowMs - eventMs > 20_000) {
+        continue
+      }
+      const linkedLane = laneById.get(laneEvent.laneId)
+      if (linkedLane?.threadId) {
+        threadIds.add(linkedLane.threadId)
+      }
+    }
+    return [...threadIds]
+      .map((threadId) => threadById.get(threadId))
+      .filter((thread): thread is NonNullable<typeof thread> => thread !== undefined)
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+      .slice(0, 14)
+  }, [laneById, snapshot?.activeThreads, snapshot?.laneEvents, snapshot?.laneSessions, threadById])
+  const liveSessionCount = useMemo(
+    () =>
+      (snapshot?.laneSessions ?? []).filter(
+        (laneSession) =>
+          laneSession.running ||
+          laneSession.pendingRequests > 0 ||
+          laneSession.readinessDeferred
+      ).length,
+    [snapshot?.laneSessions]
   )
 
   return (
@@ -184,6 +235,42 @@ export default function HomePage() {
 
       <LaneModelPrimer compact={false} />
 
+      <Panel
+        title="Live Runtime Now"
+        description="Threads with active generation/execution signals (running session, pending requests, or very recent turn events)."
+        actions={
+          <Link href="/topology" className="text-xs text-zinc-400 hover:text-zinc-200">
+            open topology →
+          </Link>
+        }
+      >
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+          <span className="rounded border border-cyan-700/50 bg-cyan-950/25 px-2 py-1 text-cyan-100">
+            live threads {liveThreadsNow.length}
+          </span>
+          <span className="rounded border border-cyan-700/50 bg-cyan-950/25 px-2 py-1 text-cyan-100">
+            live sessions {liveSessionCount}
+          </span>
+        </div>
+        {liveThreadsNow.length === 0 ? (
+          <EmptyState text="No currently live thread activity detected in this snapshot." />
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {liveThreadsNow.map((thread) => (
+              <Link
+                key={thread.id}
+                href={`/threads?search=${encodeURIComponent(thread.id)}`}
+                className="rounded-md border border-cyan-700/50 bg-cyan-950/20 px-3 py-2 text-xs text-cyan-100 hover:bg-cyan-950/35"
+              >
+                <p className="font-medium">{thread.displayName}</p>
+                <p className="mono mt-1 text-[11px] text-cyan-200/80">{thread.shortId}</p>
+                <p className="mt-1 text-[11px] text-cyan-100/80">{thread.projectName ?? "Unassigned"}</p>
+              </Link>
+            ))}
+          </div>
+        )}
+      </Panel>
+
       <section className="grid gap-6 xl:grid-cols-2">
         <Panel
           title="Lane Activity"
@@ -253,16 +340,9 @@ export default function HomePage() {
                       <td className="px-3 py-2 text-xs text-zinc-500">{formatIso({ value: lane.updatedAt })}</td>
                       <td className="px-3 py-2">
                         <RowActionMenu label={`Actions for lane ${lane.displayName}`}>
-                          <RowActionMenuButton
-                            label="Sync lane"
-                            busy={pendingActionKey === `lane-sync:${lane.laneId}`}
-                            onClick={() => {
-                              runAction({
-                                actionKey: `lane-sync:${lane.laneId}`,
-                                successMessage: `Lane ${lane.laneId} synced`,
-                                payload: { action: "lane-sync", laneId: lane.laneId },
-                              }).catch(() => undefined)
-                            }}
+                          <RowActionMenuLink
+                            href={`/lanes?search=${encodeURIComponent(lane.laneId)}`}
+                            label="Open lane controls"
                           />
                           <RowActionMenuLink
                             href={`/webhooks?laneId=${encodeURIComponent(lane.laneId)}`}

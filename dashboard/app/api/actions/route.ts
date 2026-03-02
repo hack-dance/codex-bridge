@@ -40,6 +40,20 @@ const toBooleanValue = ({ value, fallback }: { value: unknown; fallback: boolean
 const toNumberValue = ({ value, fallback }: { value: unknown; fallback: number }): number =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback
 
+const toLaneReadinessMode = ({
+  value,
+}: {
+  value: unknown
+}): "strict" | "lenient" | undefined =>
+  value === "strict" || value === "lenient" ? value : undefined
+
+const toLaneSurface = ({
+  value,
+}: {
+  value: unknown
+}): "mac-app" | "vscode" | "cli" | "any" | undefined =>
+  value === "mac-app" || value === "vscode" || value === "cli" || value === "any" ? value : undefined
+
 const toStringArray = ({ value }: { value: unknown }): string[] | undefined => {
   if (!Array.isArray(value)) {
     return undefined
@@ -212,9 +226,19 @@ export async function POST(request: Request) {
     if (!laneId) {
       return badRequest({ message: "lane-sync requires laneId" })
     }
+    const laneThreadId = toStringValue({ value: payload.threadId })
+    const preferredSurface = toLaneSurface({ value: payload.preferredSurface })
+    const requirePreferredSurface =
+      typeof payload.requirePreferredSurface === "boolean" ? payload.requirePreferredSurface : undefined
+    const body = {
+      ...(laneThreadId ? { threadId: laneThreadId } : {}),
+      ...(preferredSurface ? { preferredSurface } : {}),
+      ...(requirePreferredSurface !== undefined ? { requirePreferredSurface } : {}),
+    }
     const result = await bridgeRequest({
       endpoint: `/lanes/${laneId}/sync-from-codex`,
       method: "POST",
+      body: Object.keys(body).length > 0 ? body : undefined,
     })
     return NextResponse.json(result.payload, { status: result.status })
   }
@@ -223,9 +247,24 @@ export async function POST(request: Request) {
     if (!laneId) {
       return badRequest({ message: "lane-start-session requires laneId" })
     }
+    const laneThreadId = toStringValue({ value: payload.threadId })
+    const readinessMode = toLaneReadinessMode({ value: payload.readinessMode })
+    const preferredSurface = toLaneSurface({ value: payload.preferredSurface })
+    const requirePreferredSurface =
+      typeof payload.requirePreferredSurface === "boolean" ? payload.requirePreferredSurface : undefined
+    const waitForThreadResume =
+      typeof payload.waitForThreadResume === "boolean" ? payload.waitForThreadResume : undefined
+    const body = {
+      ...(laneThreadId ? { threadId: laneThreadId } : {}),
+      ...(readinessMode ? { readinessMode } : {}),
+      ...(preferredSurface ? { preferredSurface } : {}),
+      ...(requirePreferredSurface !== undefined ? { requirePreferredSurface } : {}),
+      ...(waitForThreadResume !== undefined ? { waitForThreadResume } : {}),
+    }
     const result = await bridgeRequest({
       endpoint: `/lanes/${laneId}/session/start`,
       method: "POST",
+      body: Object.keys(body).length > 0 ? body : undefined,
     })
     return NextResponse.json(result.payload, { status: result.status })
   }

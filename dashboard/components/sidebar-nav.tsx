@@ -1,6 +1,14 @@
 "use client"
 
-import { Activity, Blocks, Cable, GitBranchPlus, LayoutDashboard, SlidersHorizontal } from "lucide-react"
+import {
+  Activity,
+  Blocks,
+  Cable,
+  FolderTree,
+  GitBranchPlus,
+  LayoutDashboard,
+  SlidersHorizontal,
+} from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
@@ -8,6 +16,7 @@ const navItems = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/lanes", label: "Lanes", icon: Blocks },
   { href: "/threads", label: "Threads", icon: GitBranchPlus },
+  { href: "/projects", label: "Projects", icon: FolderTree },
   { href: "/webhooks", label: "Webhooks", icon: Cable },
   { href: "/topology", label: "Topology", icon: Activity },
   { href: "/system", label: "System", icon: SlidersHorizontal },

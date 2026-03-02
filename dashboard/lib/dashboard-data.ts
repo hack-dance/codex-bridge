@@ -4,7 +4,7 @@ const BRIDGE_TIMEOUT_MS_CODEX_THREADS = 8000
 const BRIDGE_TIMEOUT_MS_CODEX_THREAD_DETAIL = 2500
 const BRIDGE_TIMEOUT_MS_CODEX_RUNNING = 9000
 const BRIDGE_TIMEOUT_MS_EVENTS = 1600
-const CODEX_THREADS_LIST_LIMIT = 200
+const CODEX_THREADS_LIST_LIMIT = 1000
 const MAX_PARENT_THREAD_RESOLVE_DEPTH = 4
 const MAX_PARENT_THREAD_RESOLVE_COUNT = 320
 const MAX_EVENT_LANE_COUNT = 20
@@ -430,26 +430,65 @@ const pathBasename = ({ pathValue }: { pathValue: string | null }): string | nul
   return segments[segments.length - 1] ?? null
 }
 
+const genericProjectHints = new Set([
+  "unknown",
+  "desktop",
+  "codex desktop",
+  "cli",
+  "vscode",
+  "app server",
+  "app-server",
+  "bridge",
+])
+
+const normalizeProjectHint = ({
+  value,
+}: {
+  value: string | null | undefined
+}): string | null => {
+  const raw = toNonEmptyString(value)
+  if (!raw) {
+    return null
+  }
+  const basename = pathBasename({ pathValue: raw }) ?? raw
+  const normalized = normalizeIdentifierLabel({
+    value: basename.replace(/^project[:\s-]*/i, ""),
+  })
+  if (!normalized) {
+    return null
+  }
+  if (genericProjectHints.has(normalized.toLowerCase())) {
+    return null
+  }
+  return toTitleCase({ value: normalized })
+}
+
 const inferProjectName = ({
+  originator,
   projectId,
   repoRoot,
   cwd,
 }: {
+  originator?: string | null
   projectId?: string | null
   repoRoot?: string | null
   cwd?: string | null
 }): string | null => {
-  const explicitProjectId = toNonEmptyString(projectId)
+  const explicitProjectId = normalizeProjectHint({ value: projectId })
   if (explicitProjectId) {
-    return toTitleCase({ value: normalizeIdentifierLabel({ value: explicitProjectId }) })
+    return explicitProjectId
   }
-  const repoName = pathBasename({ pathValue: repoRoot ?? null })
+  const repoName = normalizeProjectHint({ value: repoRoot ?? null })
   if (repoName) {
-    return toTitleCase({ value: normalizeIdentifierLabel({ value: repoName }) })
+    return repoName
   }
-  const cwdName = pathBasename({ pathValue: cwd ?? null })
+  const originatorName = normalizeProjectHint({ value: originator ?? null })
+  if (originatorName) {
+    return originatorName
+  }
+  const cwdName = normalizeProjectHint({ value: cwd ?? null })
   if (cwdName) {
-    return toTitleCase({ value: normalizeIdentifierLabel({ value: cwdName }) })
+    return cwdName
   }
   return null
 }
@@ -657,6 +696,7 @@ const enrichLane = ({ lane }: { lane: Lane }): DashboardLane => {
 const enrichThread = ({ thread }: { thread: RawCodexThread }): DashboardThread => {
   const parsedSource = parseThreadSource({ source: thread.source })
   const projectName = inferProjectName({
+    originator: thread.originator ?? null,
     projectId: null,
     repoRoot: null,
     cwd: thread.cwd ?? null,
@@ -786,6 +826,7 @@ const enrichRunningSession = ({
   const projectName =
     linkedThread?.projectName ??
     inferProjectName({
+      originator: session.originator ?? null,
       projectId: null,
       repoRoot: null,
       cwd: session.cwd ?? session.path ?? null,

@@ -679,7 +679,7 @@ export const codexModule = new Elysia({ name: "codex-module" })
         .filter(Boolean);
       try {
         const threads = await runtime.listCodexThreads(
-          Math.max(1, Math.min(limit, 200)),
+          Math.max(1, Math.min(limit, 1200)),
           sourceKinds.length > 0 ? sourceKinds : defaultSourceKinds
         );
         return { threads, count: threads.length };

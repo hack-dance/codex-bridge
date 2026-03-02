@@ -578,6 +578,7 @@ async function dispatchWebhooks(event: LaneEvent) {
   await Promise.allSettled(
     subs.map(async (sub) => {
       const eventKey = `${sub.id}:${event.eventId}`;
+      const eventPayload = (event.payload ?? {}) as Record<string, unknown>;
       const payload = {
         id: randomUUID(),
         ts: nowIso(),
@@ -589,8 +590,19 @@ async function dispatchWebhooks(event: LaneEvent) {
         laneId: event.laneId,
         threadId: eventThreadId,
         sessionId: eventSessionId,
+        turnId:
+          (eventPayload.turnId as string | undefined) ??
+          (eventPayload?.turn as Record<string, unknown> | undefined)?.id ??
+          null,
+        changedFiles:
+          Array.isArray(eventPayload.changedFiles) ? eventPayload.changedFiles : null,
+        completionText:
+          typeof eventPayload.completionText === "string"
+            ? eventPayload.completionText
+            : null,
+        note: typeof eventPayload.note === "string" ? eventPayload.note : null,
         scope: normalizeWebhookScope(sub.scope) ?? null,
-        payload: event.payload ?? {},
+        payload: eventPayload,
         event,
       };
 
@@ -599,7 +611,13 @@ async function dispatchWebhooks(event: LaneEvent) {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            ...(sub.secret ? { "x-oai-app-proxy-secret": sub.secret } : {}),
+            ...(sub.secret
+              ? {
+                  "x-oai-app-proxy-secret": sub.secret,
+                  "x-openclaw-token": sub.secret,
+                  authorization: `Bearer ${sub.secret}`,
+                }
+              : {}),
           },
           body: JSON.stringify(payload),
         });
@@ -672,18 +690,25 @@ async function emitLaneSessionNotification(
   method: string,
   params: Record<string, unknown>
 ) {
+  const payload: Record<string, unknown> = {
+    method,
+    ...params,
+    threadId: (params.threadId as string | undefined) ?? lane.threadId ?? null,
+  };
+
+  if (method === "turn/completed") {
+    payload.changedFiles = await collectChangedFiles(lane.repoRoot);
+    payload.completionText = extractCompletionText(params);
+    payload.note = (params.note as string | undefined) ?? null;
+  }
+
   await emitEvent({
     eventId: randomUUID(),
     laneId: lane.laneId,
     type: laneNotificationEventType(method),
     ts: nowIso(),
     severity: "info",
-    payload: {
-      method,
-      ...params,
-      threadId:
-        (params.threadId as string | undefined) ?? lane.threadId ?? null,
-    },
+    payload,
   });
 }
 
@@ -1181,7 +1206,7 @@ async function initializeLaneSessionIfNeeded(
 }
 
 function createLaneSession(lane: Lane): LaneSession {
-  const proc = spawn(codexBinary(), ["app-server"], {
+  const proc = spawn(codexBinary(), ["app-server", "--listen", "stdio://"], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const rl = readline.createInterface({ input: proc.stdout });
@@ -1441,7 +1466,7 @@ async function restoreFromDisk() {
 }
 
 async function codexRpc(method: string, params: Record<string, unknown> = {}) {
-  const proc = spawn(codexBinary(), ["app-server"], {
+  const proc = spawn(codexBinary(), ["app-server", "--listen", "stdio://"], {
     stdio: ["pipe", "pipe", "pipe"],
   });
   const rl = readline.createInterface({ input: proc.stdout });
@@ -1658,7 +1683,7 @@ async function codexTurnOnThread(
   mode: "start" | "steer" = "start",
   expectedTurnId?: string
 ) {
-  const proc = spawn(codexBinary(), ["app-server"], {
+  const proc = spawn(codexBinary(), ["app-server", "--listen", "stdio://"], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const rl = readline.createInterface({ input: proc.stdout });
@@ -1736,7 +1761,7 @@ async function codexTurnOnThread(
 }
 
 async function codexInterruptThread(threadId: string, turnId?: string) {
-  const proc = spawn(codexBinary(), ["app-server"], {
+  const proc = spawn(codexBinary(), ["app-server", "--listen", "stdio://"], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const rl = readline.createInterface({ input: proc.stdout });

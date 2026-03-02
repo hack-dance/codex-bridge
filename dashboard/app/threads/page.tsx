@@ -85,6 +85,7 @@ export default function ThreadsPage() {
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null)
   const [archiveArmedThreadId, setArchiveArmedThreadId] = useState<string | null>(null)
+  const [liveOnly, setLiveOnly] = useState(false)
   const [search, setSearch] = useState(() => {
     if (typeof window === "undefined") {
       return ""
@@ -105,15 +106,42 @@ export default function ThreadsPage() {
     return map
   }, [snapshot?.lanes])
 
-  const runningSessionThreadIds = useMemo(
-    () => new Set((snapshot?.runningSessions ?? []).map((session) => session.threadId).filter(Boolean)),
-    [snapshot?.runningSessions]
-  )
+  const runningSessionThreadIds = useMemo(() => {
+    const threadIds = new Set<string>()
+    for (const session of snapshot?.runningSessions ?? []) {
+      if (session.threadId) {
+        threadIds.add(session.threadId)
+      }
+    }
+    for (const laneSession of snapshot?.laneSessions ?? []) {
+      if (laneSession.running && laneSession.threadId) {
+        threadIds.add(laneSession.threadId)
+      }
+    }
+    return threadIds
+  }, [snapshot?.laneSessions, snapshot?.runningSessions])
 
   const activeThreadIds = useMemo(
     () => new Set((snapshot?.activeThreads ?? []).map((thread) => thread.id)),
     [snapshot?.activeThreads]
   )
+  const liveThreadIds = useMemo(() => {
+    const threadIds = new Set<string>((snapshot?.activeThreads ?? []).map((thread) => thread.id))
+    for (const session of snapshot?.runningSessions ?? []) {
+      if (session.threadId) {
+        threadIds.add(session.threadId)
+      }
+    }
+    for (const laneSession of snapshot?.laneSessions ?? []) {
+      if (
+        (laneSession.running || laneSession.pendingRequests > 0 || laneSession.readinessDeferred) &&
+        laneSession.threadId
+      ) {
+        threadIds.add(laneSession.threadId)
+      }
+    }
+    return threadIds
+  }, [snapshot?.activeThreads, snapshot?.laneSessions, snapshot?.runningSessions])
   const threadById = useMemo(
     () => new Map((snapshot?.threads ?? []).map((thread) => [thread.id, thread])),
     [snapshot?.threads]
@@ -145,11 +173,12 @@ export default function ThreadsPage() {
 
   const treeRows = useMemo(() => {
     const rows = buildThreadTree({ threads: snapshot?.threads ?? [] })
+    const rowsWithLiveFilter = liveOnly ? rows.filter(({ thread }) => liveThreadIds.has(thread.id)) : rows
     const lowered = search.trim().toLowerCase()
     if (!lowered) {
-      return rows
+      return rowsWithLiveFilter
     }
-    return rows.filter(({ thread }) => {
+    return rowsWithLiveFilter.filter(({ thread }) => {
       const haystack = [
         thread.id,
         thread.title,
@@ -164,7 +193,7 @@ export default function ThreadsPage() {
         .join(" ")
       return haystack.includes(lowered)
     })
-  }, [snapshot?.threads, search])
+  }, [snapshot?.threads, search, liveOnly, liveThreadIds])
 
   return (
     <div className="flex w-full flex-col gap-6">
@@ -192,7 +221,7 @@ export default function ThreadsPage() {
       <LaneModelPrimer title="Entity ownership model" compact showStatusLegend={false} />
 
       <Panel title={`Thread Topology (${treeRows.length})`}>
-        <div className="mb-3">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <label className="flex h-9 min-w-[340px] items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100">
             <Search size={14} className="text-zinc-500" />
             <input
@@ -203,6 +232,18 @@ export default function ThreadsPage() {
               className="w-full bg-transparent outline-none placeholder:text-zinc-500"
             />
           </label>
+          <label className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs text-zinc-300">
+            <input
+              type="checkbox"
+              checked={liveOnly}
+              onChange={(event) => setLiveOnly(event.target.checked)}
+              className="h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+            />
+            live only
+          </label>
+          <span className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-400">
+            live threads {liveThreadIds.size}
+          </span>
         </div>
 
         {isLoading && !snapshot ? (
@@ -229,6 +270,7 @@ export default function ThreadsPage() {
                   const attachedLanes = laneIdsByThreadId.get(thread.id) ?? []
                   const hasRunningSession = runningSessionThreadIds.has(thread.id)
                   const isActive = activeThreadIds.has(thread.id)
+                  const isLive = liveThreadIds.has(thread.id)
                   return (
                     <tr key={thread.id} className="align-top hover:bg-zinc-900/60">
                       <td className="px-3 py-2">
@@ -312,6 +354,15 @@ export default function ThreadsPage() {
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1 text-xs">
+                          <span
+                            className={`rounded px-2 py-0.5 font-medium ${
+                              isLive
+                                ? "animate-pulse bg-cyan-100 text-cyan-900"
+                                : "bg-zinc-200 text-zinc-700"
+                            }`}
+                          >
+                            {isLive ? "LIVE" : "quiet"}
+                          </span>
                           <span
                             className={`rounded px-2 py-0.5 font-medium ${
                               isActive ? "bg-blue-100 text-blue-800" : "bg-zinc-200 text-zinc-700"

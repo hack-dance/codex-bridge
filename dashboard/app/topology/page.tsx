@@ -30,6 +30,10 @@ import {
 import type { DashboardLane, DashboardThread } from "@/lib/dashboard-data";
 import { laneStatusClassName, runtimeOriginLabel } from "@/lib/dashboard-ui";
 import {
+  buildProjectSummaries,
+  type DashboardProjectSummary,
+} from "@/lib/project-summary";
+import {
   runDashboardAction,
   useDashboardSnapshot,
 } from "@/lib/use-dashboard-snapshot";
@@ -79,15 +83,7 @@ interface TopologyMeta {
   status?: string;
 }
 
-interface ProjectSummary {
-  projectId: string;
-  projectName: string;
-  threadCount: number;
-  laneCount: number;
-  sessionCount: number;
-  agentCount: number;
-  problemLaneCount: number;
-}
+type ProjectSummary = DashboardProjectSummary;
 
 const miniMapNodeColor = ({
   node,
@@ -482,6 +478,7 @@ export default function TopologyPage() {
   const [deleteLanesArmed, setDeleteLanesArmed] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [projectFilterQuery, setProjectFilterQuery] = useState("");
+  const [liveOnly, setLiveOnly] = useState(false);
   const [reactFlowInstance, setReactFlowInstance] = useState<
     ReactFlowInstance<Node<{ label: ReactNode; meta?: TopologyMeta }>, Edge> | null
   >(null);
@@ -559,6 +556,52 @@ export default function TopologyPage() {
       ),
     [snapshot?.laneSessions]
   );
+
+  const liveThreadIds = useMemo(() => {
+    const threadIds = new Set<string>(
+      (snapshot?.activeThreads ?? []).map((thread) => thread.id)
+    );
+    const laneById = new Map((snapshot?.lanes ?? []).map((lane) => [lane.laneId, lane]));
+    for (const session of snapshot?.laneSessions ?? []) {
+      if (
+        session.running ||
+        session.pendingRequests > 0 ||
+        session.readinessDeferred
+      ) {
+        if (session.threadId) {
+          threadIds.add(session.threadId);
+          continue;
+        }
+        const lane = laneById.get(session.laneId);
+        if (lane?.threadId) {
+          threadIds.add(lane.threadId);
+        }
+      }
+    }
+    const nowMs = Date.now();
+    for (const laneEvent of snapshot?.laneEvents ?? []) {
+      if (
+        !laneEvent.type.startsWith("lane.turn.") &&
+        laneEvent.type !== "lane.session.started"
+      ) {
+        continue;
+      }
+      const eventMs = Date.parse(laneEvent.ts);
+      if (Number.isNaN(eventMs) || nowMs - eventMs > 20_000) {
+        continue;
+      }
+      const lane = laneById.get(laneEvent.laneId);
+      if (lane?.threadId) {
+        threadIds.add(lane.threadId);
+      }
+    }
+    return threadIds;
+  }, [
+    snapshot?.activeThreads,
+    snapshot?.laneEvents,
+    snapshot?.laneSessions,
+    snapshot?.lanes,
+  ]);
 
   const topologyRows = useMemo(() => {
     const allThreads = snapshot?.threads ?? [];
@@ -710,11 +753,15 @@ export default function TopologyPage() {
             );
           });
 
+    const rowsWithLiveFilter = liveOnly
+      ? rowsWithModeFilter.filter(({ thread }) => liveThreadIds.has(thread.id))
+      : rowsWithModeFilter;
+
     const lowered = search.trim().toLowerCase();
     if (!lowered) {
-      return rowsWithModeFilter;
+      return rowsWithLiveFilter;
     }
-    return rowsWithModeFilter.filter(({ thread }) => {
+    return rowsWithLiveFilter.filter(({ thread }) => {
       const attachedLanes = laneByThread.get(thread.id) ?? [];
       const haystack = [
         thread.id,
@@ -743,6 +790,8 @@ export default function TopologyPage() {
     hideStaleThreads,
     staleThreadHours,
     topologyMode,
+    liveOnly,
+    liveThreadIds,
   ]);
 
   const collapsedTopology = useMemo(
@@ -753,11 +802,6 @@ export default function TopologyPage() {
         maxThreads: Math.max(10, maxThreads),
       }),
     [topologyRows, maxSubAgentsPerParent, maxThreads]
-  );
-
-  const activeThreadIds = useMemo(
-    () => new Set((snapshot?.activeThreads ?? []).map((thread) => thread.id)),
-    [snapshot?.activeThreads]
   );
 
   const flowGraph = useMemo(() => {
@@ -894,7 +938,7 @@ export default function TopologyPage() {
         const threadX = PROJECT_PADDING_X + threadDepthIndent;
         const threadY = cursorY;
         const threadNodeId = `thread:${row.thread.id}`;
-        const threadIsActive = activeThreadIds.has(row.thread.id);
+        const threadIsLive = liveThreadIds.has(row.thread.id);
         const threadIsSubAgent = isSubAgentThread({ thread: row.thread });
         const threadHooks = (snapshot?.webhooks ?? []).filter((subscription) =>
           webhookMatches({ subscription, threadId: row.thread.id })
@@ -933,7 +977,7 @@ export default function TopologyPage() {
             }),
           },
           style: threadNodeStyle({
-            active: threadIsActive,
+            active: threadIsLive,
             hasChildren:
               threadLanes.length > 0 || row.thread.sourceKind.length > 0,
             isSubAgent: threadIsSubAgent,
@@ -948,10 +992,10 @@ export default function TopologyPage() {
             id: `thread-edge:${parentId}->${row.thread.id}`,
             source: `thread:${parentId}`,
             target: threadNodeId,
-            animated: threadIsActive,
+            animated: threadIsLive,
             style: {
-              stroke: threadIsActive ? "#67e8f9" : "#6366f1",
-              strokeWidth: threadIsActive ? 1.6 : 1.2,
+              stroke: threadIsLive ? "#67e8f9" : "#6366f1",
+              strokeWidth: threadIsLive ? 1.6 : 1.2,
             },
           });
         }
@@ -962,7 +1006,7 @@ export default function TopologyPage() {
               id: `thread-edge:missing:${parentId}->${row.thread.id}`,
               source: missingParentNodeId,
               target: threadNodeId,
-              animated: threadIsActive,
+              animated: threadIsLive,
               style: {
                 stroke: "#818cf8",
                 strokeWidth: 1.2,
@@ -1201,6 +1245,9 @@ export default function TopologyPage() {
         PROJECT_NODE_BASE_HEIGHT,
         cursorY + PROJECT_PADDING_Y
       );
+      const projectLiveThreadCount = projectRows.filter((row) =>
+        liveThreadIds.has(row.thread.id)
+      ).length;
       const projectSummarySubtitle = `${projectRows.length} threads · ${projectLanes.length} lanes · ${projectRunningSessionCount} sessions · ${projectAgentCount} agents${projectProblemLaneCount > 0 ? ` · ${projectProblemLaneCount} issues` : ""}`;
       projectSummaries.push({
         projectId,
@@ -1210,6 +1257,7 @@ export default function TopologyPage() {
         sessionCount: projectRunningSessionCount,
         agentCount: projectAgentCount,
         problemLaneCount: projectProblemLaneCount,
+        liveThreadCount: projectLiveThreadCount,
       });
 
       nodes.push({
@@ -1268,7 +1316,7 @@ export default function TopologyPage() {
     laneByThread,
     layoutPreset,
     runningSessionByLaneId,
-    activeThreadIds,
+    liveThreadIds,
     snapshot?.lanes,
     snapshot?.webhooks,
     viewMode,
@@ -1307,15 +1355,23 @@ export default function TopologyPage() {
     () => new Map(flowGraph.nodes.map((node) => [node.id, node])),
     [flowGraph.nodes]
   );
+  const allProjectSummaries = useMemo(
+    () => buildProjectSummaries({ snapshot }),
+    [snapshot]
+  );
+  const renderedProjectNames = useMemo(
+    () => new Set(flowGraph.projectSummaries.map((project) => project.projectName)),
+    [flowGraph.projectSummaries]
+  );
   const filteredProjectSummaries = useMemo(() => {
     const lowered = projectFilterQuery.trim().toLowerCase();
     if (!lowered) {
-      return flowGraph.projectSummaries;
+      return allProjectSummaries;
     }
-    return flowGraph.projectSummaries.filter((project) =>
+    return allProjectSummaries.filter((project) =>
       project.projectName.toLowerCase().includes(lowered)
     );
-  }, [flowGraph.projectSummaries, projectFilterQuery]);
+  }, [allProjectSummaries, projectFilterQuery]);
 
   const resolveNodeGlobalBox = useCallback(
     ({ nodeId }: { nodeId: string }) => {
@@ -1507,6 +1563,10 @@ export default function TopologyPage() {
       }
       if (key === "a") {
         applyTopologyModePreset({ mode: "audit" });
+        return;
+      }
+      if (key === "l") {
+        setLiveOnly((current) => !current);
       }
     };
     window.addEventListener("keydown", handleKeydown);
@@ -1624,6 +1684,16 @@ export default function TopologyPage() {
             <span>hide dead</span>
           </label>
           <label className="flex items-center gap-2 text-xs text-zinc-400">
+            live only
+            <input
+              checked={liveOnly}
+              className="h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+              onChange={(event) => setLiveOnly(event.target.checked)}
+              type="checkbox"
+            />
+            <span>active now</span>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-zinc-400">
             stale hours
             <input
               className="h-8 w-20 rounded border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-100"
@@ -1696,6 +1766,15 @@ export default function TopologyPage() {
           <span className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1">
             showing {collapsedTopology.rows.length} thread rows
           </span>
+          <span
+            className={`rounded border px-2 py-1 ${
+              liveOnly
+                ? "border-cyan-600/50 bg-cyan-950/30 text-cyan-100"
+                : "border-zinc-700 bg-zinc-900"
+            }`}
+          >
+            live threads now: {liveThreadIds.size}
+          </span>
           {collapsedTopology.hiddenByThreadCap > 0 ? (
             <span className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1">
               hidden by max thread cap: {collapsedTopology.hiddenByThreadCap}
@@ -1719,7 +1798,10 @@ export default function TopologyPage() {
 
         <div className="sticky top-2 z-10 mb-3 rounded-lg border border-zinc-700/80 bg-zinc-900/95 p-3 backdrop-blur">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
-            <span>project rail (persists while graph pans)</span>
+            <span>
+              project rail · all projects {allProjectSummaries.length} · visible in graph{" "}
+              {flowGraph.projectSummaries.length}
+            </span>
             <div className="flex items-center gap-2">
               <input
                 className="h-8 w-48 rounded border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
@@ -1741,30 +1823,66 @@ export default function TopologyPage() {
               >
                 fit all
               </button>
+              <button
+                className="rounded border border-cyan-700/60 bg-cyan-950/20 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-950/35"
+                onClick={() => {
+                  applyTopologyModePreset({ mode: "debug" });
+                  setSearch("");
+                  setLiveOnly(false);
+                }}
+                type="button"
+              >
+                show all projects
+              </button>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {filteredProjectSummaries.map((project) => (
+            {filteredProjectSummaries.map((project) => {
+              const isRenderedProject = renderedProjectNames.has(
+                project.projectName
+              );
+              return (
               <button
                 className={`rounded border px-2 py-1 text-left text-xs transition ${
-                  project.problemLaneCount > 0
+                  !isRenderedProject
+                    ? "border-dashed border-cyan-700/60 bg-cyan-950/15 text-cyan-100 hover:bg-cyan-950/25"
+                    : project.problemLaneCount > 0
                     ? "border-amber-600/60 bg-amber-950/25 text-amber-100 hover:bg-amber-950/40"
                     : "border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-800"
                 }`}
                 key={project.projectId}
-                onClick={() => focusGraphNode({ nodeId: project.projectId })}
+                onClick={() => {
+                  const projectNodeId = `project:${project.projectName}`;
+                  if (isRenderedProject && nodeById.has(projectNodeId)) {
+                    focusGraphNode({ nodeId: projectNodeId });
+                    return;
+                  }
+                  applyTopologyModePreset({ mode: "debug" });
+                  setLiveOnly(false);
+                  setSearch(project.projectName);
+                  setActionMessage(
+                    `Switched to debug mode and filtered by project ${project.projectName}`
+                  );
+                }}
                 type="button"
               >
                 <div className="font-medium">{project.projectName}</div>
                 <div className="mono text-[11px] text-zinc-400">
                   t {project.threadCount} · l {project.laneCount} · s{" "}
-                  {project.sessionCount} · a {project.agentCount}
+                  {project.sessionCount} · a {project.agentCount} · live{" "}
+                  {project.liveThreadCount}
                   {project.problemLaneCount > 0
                     ? ` · issues ${project.problemLaneCount}`
                     : ""}
                 </div>
+                {!isRenderedProject ? (
+                  <div className="mt-1 text-[11px] text-cyan-300">
+                    outside current graph filter
+                  </div>
+                ) : null}
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -1844,6 +1962,13 @@ export default function TopologyPage() {
                 type="button"
               >
                 audit mode (A)
+              </button>
+              <button
+                className="rounded border border-cyan-600/40 bg-cyan-950/30 px-2 py-1 hover:bg-cyan-900/40"
+                onClick={() => setLiveOnly((current) => !current)}
+                type="button"
+              >
+                live only (L)
               </button>
               <button
                 className="rounded border border-cyan-600/40 bg-cyan-950/30 px-2 py-1 hover:bg-cyan-900/40"

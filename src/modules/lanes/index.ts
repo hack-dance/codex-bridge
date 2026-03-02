@@ -76,6 +76,35 @@ const laneCleanupBody = t.Object({
   dryRun: t.Optional(t.Boolean()),
 });
 
+const lanePreferredSurfaceBody = t.Optional(
+  t.Union([
+    t.Literal("mac-app"),
+    t.Literal("vscode"),
+    t.Literal("cli"),
+    t.Literal("any"),
+  ])
+);
+
+const laneSyncBody = t.Optional(
+  t.Object({
+    threadId: t.Optional(t.String()),
+    preferredSurface: lanePreferredSurfaceBody,
+    requirePreferredSurface: t.Optional(t.Boolean()),
+  })
+);
+
+const laneSessionStartBody = t.Optional(
+  t.Object({
+    threadId: t.Optional(t.String()),
+    readinessMode: t.Optional(
+      t.Union([t.Literal("strict"), t.Literal("lenient")])
+    ),
+    preferredSurface: lanePreferredSurfaceBody,
+    requirePreferredSurface: t.Optional(t.Boolean()),
+    waitForThreadResume: t.Optional(t.Boolean()),
+  })
+);
+
 type LaneAction = "prompt" | "steer" | "interrupt";
 
 interface LaneActionBodyInput {
@@ -673,18 +702,36 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
   )
   .post(
     "/lanes/:laneId/sync-from-codex",
-    async ({ params, status }) => {
+    async ({ params, body, status }) => {
       const lane = runtime.getLaneOr404(params.laneId);
       if (!lane) {
         return status(404, { error: "lane_not_found" });
       }
-      if (!lane.threadId) {
-        return status(400, { error: "lane_not_attached" });
+
+      const syncBody = (body ?? {}) as {
+        threadId?: string;
+        preferredSurface?: "mac-app" | "vscode" | "cli" | "any";
+        requirePreferredSurface?: boolean;
+      };
+      const requestedThreadId = String(syncBody.threadId ?? "").trim();
+      const effectiveThreadId = requestedThreadId || lane.threadId;
+      if (!effectiveThreadId) {
+        return status(400, {
+          error: "lane_not_attached",
+          message:
+            "sync requires lane threadId; provide threadId in request body",
+        });
       }
+
+      const preferredSurface =
+        syncBody.preferredSurface !== undefined
+          ? parseAttachPreferredSurface({ value: syncBody.preferredSurface })
+          : lane.preferredSurface ?? "any";
+      const requirePreferredSurface = syncBody.requirePreferredSurface === true;
 
       let thread: CodexThread | null = null;
       try {
-        thread = await runtime.getCodexThreadById(lane.threadId);
+        thread = await runtime.getCodexThreadById(effectiveThreadId);
       } catch (error) {
         return status(502, {
           error: "codex_rpc_failed",
@@ -695,12 +742,30 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         return status(404, { error: "thread_not_found" });
       }
 
+      const detectedSurface =
+        thread.surface ?? runtime.normalizeSurface(thread.source);
+      if (
+        isSurfaceMismatch({
+          requirePreferredSurface,
+          preferredSurface,
+          detectedSurface,
+        })
+      ) {
+        return status(409, {
+          error: "surface_mismatch",
+          message: `thread surface ${detectedSurface} does not match preferredSurface ${preferredSurface}`,
+        });
+      }
+
+      lane.threadId = effectiveThreadId;
       lane.repoRoot = thread.cwd ?? lane.repoRoot;
-      lane.surface =
-        thread.surface ?? runtime.normalizeSurface(thread.source) ?? "unknown";
+      lane.surface = detectedSurface;
+      if (syncBody.preferredSurface !== undefined) {
+        lane.preferredSurface = preferredSurface;
+      }
       lane.updatedAt = runtime.nowIso();
       runtime.attachedThreadLastUpdated.set(
-        lane.threadId,
+        effectiveThreadId,
         thread.updatedAt ?? 0
       );
       await runtime.persistLane(lane);
@@ -711,10 +776,12 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         ts: runtime.nowIso(),
         severity: "info",
         payload: {
-          threadId: lane.threadId,
+          threadId: effectiveThreadId,
           cwd: thread.cwd ?? null,
           source: thread.source ?? null,
           updatedAt: thread.updatedAt ?? null,
+          preferredSurface,
+          requirePreferredSurface,
         },
       });
 
@@ -726,6 +793,7 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         tags: ["lanes"],
       },
       params: laneIdParams,
+      body: laneSyncBody,
     }
   )
   .delete(
@@ -811,16 +879,104 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
   )
   .post(
     "/lanes/:laneId/session/start",
-    async ({ params, status }) => {
+    async ({ params, body, status }) => {
       const lane = runtime.getLaneOr404(params.laneId);
       if (!lane) {
         return status(404, { error: "lane_not_found" });
       }
+
+      const startBody = (body ?? {}) as {
+        threadId?: string;
+        readinessMode?: "strict" | "lenient";
+        preferredSurface?: "mac-app" | "vscode" | "cli" | "any";
+        requirePreferredSurface?: boolean;
+        waitForThreadResume?: boolean;
+      };
+      const requestedThreadId = String(startBody.threadId ?? "").trim();
+      const preferredSurface =
+        startBody.preferredSurface !== undefined
+          ? parseAttachPreferredSurface({ value: startBody.preferredSurface })
+          : lane.preferredSurface ?? "any";
+      const requirePreferredSurface = startBody.requirePreferredSurface === true;
+      const waitForThreadResume = startBody.waitForThreadResume !== false;
+
+      let laneChanged = false;
+
+      if (startBody.readinessMode) {
+        lane.readinessMode = startBody.readinessMode;
+        laneChanged = true;
+      }
+
+      if (startBody.preferredSurface !== undefined) {
+        lane.preferredSurface = preferredSurface;
+        laneChanged = true;
+      }
+
+      if (requestedThreadId) {
+        let thread: CodexThread | null = null;
+        try {
+          thread = await runtime.getCodexThreadById(requestedThreadId);
+        } catch (error) {
+          return status(502, {
+            error: "codex_rpc_failed",
+            message: (error as Error).message,
+          });
+        }
+        if (!thread) {
+          return status(404, { error: "thread_not_found" });
+        }
+
+        const detectedSurface =
+          thread.surface ?? runtime.normalizeSurface(thread.source);
+        if (
+          isSurfaceMismatch({
+            requirePreferredSurface,
+            preferredSurface,
+            detectedSurface,
+          })
+        ) {
+          return status(409, {
+            error: "surface_mismatch",
+            message: `thread surface ${detectedSurface} does not match preferredSurface ${preferredSurface}`,
+          });
+        }
+
+        lane.threadId = requestedThreadId;
+        lane.repoRoot = thread.cwd ?? lane.repoRoot;
+        lane.surface = detectedSurface;
+        runtime.attachedThreadLastUpdated.set(
+          requestedThreadId,
+          thread.updatedAt ?? 0
+        );
+        laneChanged = true;
+      } else if (
+        requirePreferredSurface &&
+        preferredSurface !== "any" &&
+        (lane.surface ?? "unknown") !== preferredSurface
+      ) {
+        return status(409, {
+          error: "surface_mismatch",
+          message: `lane surface ${lane.surface ?? "unknown"} does not match preferredSurface ${preferredSurface}`,
+        });
+      }
+
+      if (laneChanged) {
+        lane.updatedAt = runtime.nowIso();
+        await runtime.persistLane(lane);
+      }
+
       if (!lane.threadId) {
-        return status(400, { error: "lane_not_attached" });
+        return status(400, {
+          error: "lane_not_attached",
+          message:
+            "start session requires lane threadId; provide threadId in request body",
+        });
       }
       try {
-        const session = await runtime.startLaneSession(lane);
+        const session = await runtime.startLaneSession(lane, {
+          waitForThreadResume,
+          emitStartedEvent: true,
+        });
         if (lane.status !== "running") {
           await runtime.setLaneStatus(lane, "running", "lane.running", {
             threadId: lane.threadId,
@@ -831,6 +987,8 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
           running: true,
           startedAt: session.startedAt,
           threadId: lane.threadId,
+          waitForThreadResume,
+          readinessMode: lane.readinessMode ?? "lenient",
         };
       } catch (error) {
         await runtime.setLaneStatus(lane, "blocked", "lane.session.blocked", {
@@ -849,6 +1007,7 @@ export const lanesModule = new Elysia({ name: "lanes-module" })
         tags: ["lanes"],
       },
       params: laneSessionParams,
+      body: laneSessionStartBody,
     }
   )
   .post(
